@@ -1,17 +1,19 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/bluesky-social/go-util/pkg/telemetry"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/glebarez/sqlite"
@@ -19,7 +21,9 @@ import (
 	"github.com/haileyok/cocoon/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/urfave/cli/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -27,163 +31,77 @@ import (
 var Version = "dev"
 
 func main() {
-	app := &cli.App{
-		Name:  "cocoon",
-		Usage: "An atproto PDS",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "addr",
-				Value:   ":8080",
-				EnvVars: []string{"COCOON_ADDR"},
-			},
-			&cli.StringFlag{
-				Name:    "db-name",
-				Value:   "cocoon.db",
-				EnvVars: []string{"COCOON_DB_NAME"},
-			},
-
-			&cli.StringFlag{
-				Name:    "did",
-				EnvVars: []string{"COCOON_DID"},
-			},
-			&cli.StringFlag{
-				Name:    "hostname",
-				EnvVars: []string{"COCOON_HOSTNAME"},
-			},
-			&cli.StringFlag{
-				Name:    "rotation-key-path",
-				EnvVars: []string{"COCOON_ROTATION_KEY_PATH"},
-			},
-			&cli.StringFlag{
-				Name:    "jwk-path",
-				EnvVars: []string{"COCOON_JWK_PATH"},
-			},
-			&cli.StringFlag{
-				Name:    "contact-email",
-				EnvVars: []string{"COCOON_CONTACT_EMAIL"},
-			},
-			&cli.StringSliceFlag{
-				Name:    "relays",
-				EnvVars: []string{"COCOON_RELAYS"},
-			},
-			&cli.StringFlag{
-				Name:    "admin-password",
-				EnvVars: []string{"COCOON_ADMIN_PASSWORD"},
-			},
-			&cli.BoolFlag{
-				Name:    "require-invite",
-				EnvVars: []string{"COCOON_REQUIRE_INVITE"},
-				Value:   true,
-			},
-			&cli.StringFlag{
-				Name:    "smtp-user",
-				EnvVars: []string{"COCOON_SMTP_USER"},
-			},
-			&cli.StringFlag{
-				Name:    "smtp-pass",
-				EnvVars: []string{"COCOON_SMTP_PASS"},
-			},
-			&cli.StringFlag{
-				Name:    "smtp-host",
-				EnvVars: []string{"COCOON_SMTP_HOST"},
-			},
-			&cli.StringFlag{
-				Name:    "smtp-port",
-				EnvVars: []string{"COCOON_SMTP_PORT"},
-			},
-			&cli.StringFlag{
-				Name:    "smtp-email",
-				EnvVars: []string{"COCOON_SMTP_EMAIL"},
-			},
-			&cli.StringFlag{
-				Name:    "smtp-name",
-				EnvVars: []string{"COCOON_SMTP_NAME"},
-			},
-			&cli.BoolFlag{
-				Name:    "ipfs-blobstore-enabled",
-				EnvVars: []string{"COCOON_IPFS_BLOBSTORE_ENABLED"},
-				Usage:   "Store blobs on IPFS via the Kubo HTTP RPC API instead of SQLite.",
-			},
-			&cli.StringFlag{
-				Name:    "ipfs-node-url",
-				EnvVars: []string{"COCOON_IPFS_NODE_URL"},
-				Value:   "http://127.0.0.1:5001",
-				Usage:   "Base URL of the Kubo (go-ipfs) RPC API used for adding and fetching blobs.",
-			},
-			&cli.StringFlag{
-				Name:    "ipfs-gateway-url",
-				EnvVars: []string{"COCOON_IPFS_GATEWAY_URL"},
-				Usage:   "Public IPFS gateway URL for blob redirects (e.g., https://ipfs.io). When set, getBlob redirects to this URL instead of proxying through the node.",
-			},
-			&cli.StringFlag{
-				Name:    "ipfs-pinning-service-url",
-				EnvVars: []string{"COCOON_IPFS_PINNING_SERVICE_URL"},
-				Usage:   "Remote IPFS Pinning Service API endpoint (e.g., https://api.pinata.cloud/psa). Leave empty to skip remote pinning.",
-			},
-			&cli.StringFlag{
-				Name:    "ipfs-pinning-service-token",
-				EnvVars: []string{"COCOON_IPFS_PINNING_SERVICE_TOKEN"},
-				Usage:   "Bearer token for authenticating with the remote IPFS pinning service.",
-			},
-			&cli.StringFlag{
-				Name:    "session-secret",
-				EnvVars: []string{"COCOON_SESSION_SECRET"},
-			},
-			&cli.StringFlag{
-				Name:    "session-cookie-key",
-				EnvVars: []string{"COCOON_SESSION_COOKIE_KEY"},
-				Value:   "session",
-			},
-			&cli.StringFlag{
-				Name:    "blockstore-variant",
-				EnvVars: []string{"COCOON_BLOCKSTORE_VARIANT"},
-				Value:   "sqlite",
-			},
-			&cli.StringFlag{
-				Name:    "fallback-proxy",
-				EnvVars: []string{"COCOON_FALLBACK_PROXY"},
-			},
-			telemetry.CLIFlagDebug,
-			telemetry.CLIFlagMetricsListenAddress,
-		},
-		Commands: []*cli.Command{
-			runServe,
-			runCreateRotationKey,
-			runCreatePrivateJwk,
-			runCreateInviteCode,
-			runResetPassword,
-		},
-		ErrWriter: os.Stdout,
-		Version:   Version,
-	}
-
-	if err := app.Run(os.Args); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
 	}
 }
 
-var runServe = &cli.Command{
-	Name:  "run",
-	Usage: "Start the cocoon PDS",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:    "log-level",
-			Usage:   "Log level: debug, info, warn, error",
-			EnvVars: []string{"COCOON_LOG_LEVEL", "LOG_LEVEL"},
-			Value:   "info",
-		},
-	},
-	Action: func(cmd *cli.Context) error {
+var rootCmd = &cobra.Command{
+	Use:           "cocoon",
+	Short:         "An atproto PDS",
+	Version:       Version,
+	SilenceErrors: true,
+	SilenceUsage:  true,
+}
 
-		logger := telemetry.StartLogger(cmd)
-		telemetry.StartMetrics(cmd)
+func init() {
+	pf := rootCmd.PersistentFlags()
 
-		var level slog.Level
-		switch strings.ToLower(cmd.String("log-level")) {
+	pf.String(flagAddr, ":8080", "Listen address")
+	pf.String(flagDbName, "cocoon.db", "SQLite database file path")
+	pf.String(flagDid, "", "DID of this PDS")
+	pf.String(flagHostname, "", "Public hostname of this PDS")
+	pf.String(flagRotationKeyPath, "", "Path to the rotation key file")
+	pf.String(flagJwkPath, "", "Path to the private JWK file")
+	pf.String(flagContactEmail, "", "Contact e-mail address for this PDS")
+	pf.StringSlice(flagRelays, []string{}, "Relay URLs to crawl")
+	pf.String(flagAdminPassword, "", "Admin password")
+	pf.Bool(flagRequireInvite, true, "Require an invite code to create an account")
+	pf.String(flagSmtpUser, "", "SMTP username")
+	pf.String(flagSmtpPass, "", "SMTP password")
+	pf.String(flagSmtpHost, "", "SMTP host")
+	pf.String(flagSmtpPort, "", "SMTP port")
+	pf.String(flagSmtpEmail, "", "SMTP from address")
+	pf.String(flagSmtpName, "", "SMTP from name")
+	pf.Bool(flagIpfsBlobstoreEnabled, false, "Store blobs on IPFS via the Kubo HTTP RPC API instead of SQLite")
+	pf.String(flagIpfsNodeUrl, "http://127.0.0.1:5001", "Base URL of the Kubo (go-ipfs) RPC API used for adding and fetching blobs")
+	pf.String(flagIpfsGatewayUrl, "", "Public IPFS gateway URL for blob redirects (e.g. https://ipfs.io). When set, getBlob redirects to this URL instead of proxying through the node")
+	pf.String(flagIpfsPinningServiceUrl, "", "Remote IPFS Pinning Service API endpoint (e.g. https://api.pinata.cloud/psa). Leave empty to skip remote pinning")
+	pf.String(flagIpfsPinningServiceToken, "", "Bearer token for authenticating with the remote IPFS pinning service")
+	pf.String(flagSessionSecret, "", "Session secret")
+	pf.String(flagSessionCookieKey, "session", "Session cookie key name")
+	pf.String(flagBlockstoreVariant, "sqlite", "Blockstore variant (sqlite)")
+	pf.String(flagFallbackProxy, "", "Fallback proxy URL")
+	pf.String(flagLogLevel, "info", "Log level: debug, info, warn, error")
+	pf.Bool(flagDebug, false, "Enable debug logging (shorthand for --log-level=debug)")
+	pf.String(flagMetricsListenAddress, "0.0.0.0:6009", "Listen address for the Prometheus metrics / pprof endpoint")
+
+	v := viper.New()
+	v.SetEnvPrefix("COCOON")
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	v.AutomaticEnv()
+	_ = v.BindEnv(flagDebug, "DEBUG")
+	_ = v.BindEnv(flagLogLevel, "COCOON_LOG_LEVEL", "LOG_LEVEL")
+	_ = v.BindEnv(flagMetricsListenAddress, "METRICS_LISTEN_ADDRESS")
+	_ = v.BindPFlags(pf)
+
+	rootCmd.AddCommand(
+		newServeCmd(v),
+		newCreateRotationKeyCmd(),
+		newCreatePrivateJwkCmd(),
+		newCreateInviteCodeCmd(v),
+		newResetPasswordCmd(v),
+	)
+}
+
+func buildLogger(v *viper.Viper) *slog.Logger {
+	var level slog.Level
+	if v.GetBool(flagDebug) {
+		level = slog.LevelDebug
+	} else {
+		switch strings.ToLower(v.GetString(flagLogLevel)) {
 		case "debug":
 			level = slog.LevelDebug
-		case "info":
-			level = slog.LevelInfo
 		case "warn":
 			level = slog.LevelWarn
 		case "error":
@@ -191,204 +109,240 @@ var runServe = &cli.Command{
 		default:
 			level = slog.LevelInfo
 		}
+	}
 
-		s, err := server.New(&server.Args{
-			Logger:          logger,
-			LogLevel:        level,
-			Addr:            cmd.String("addr"),
-			DbName:          cmd.String("db-name"),
-			Did:             cmd.String("did"),
-			Hostname:        cmd.String("hostname"),
-			RotationKeyPath: cmd.String("rotation-key-path"),
-			JwkPath:         cmd.String("jwk-path"),
-			ContactEmail:    cmd.String("contact-email"),
-			Version:         Version,
-			Relays:          cmd.StringSlice("relays"),
-			AdminPassword:   cmd.String("admin-password"),
-			RequireInvite:   cmd.Bool("require-invite"),
-			SmtpUser:        cmd.String("smtp-user"),
-			SmtpPass:        cmd.String("smtp-pass"),
-			SmtpHost:        cmd.String("smtp-host"),
-			SmtpPort:        cmd.String("smtp-port"),
-			SmtpEmail:       cmd.String("smtp-email"),
-			SmtpName:        cmd.String("smtp-name"),
-			IPFSConfig: &server.IPFSConfig{
-				BlobstoreEnabled:    cmd.Bool("ipfs-blobstore-enabled"),
-				NodeURL:             cmd.String("ipfs-node-url"),
-				GatewayURL:          cmd.String("ipfs-gateway-url"),
-				PinningServiceURL:   cmd.String("ipfs-pinning-service-url"),
-				PinningServiceToken: cmd.String("ipfs-pinning-service-token"),
-			},
-			SessionSecret:     cmd.String("session-secret"),
-			SessionCookieKey:  cmd.String("session-cookie-key"),
-			BlockstoreVariant: server.MustReturnBlockstoreVariant(cmd.String("blockstore-variant")),
-			FallbackProxy:     cmd.String("fallback-proxy"),
-		})
-		if err != nil {
-			fmt.Printf("error creating cocoon: %v", err)
-			return err
-		}
-
-		if err := s.Serve(cmd.Context); err != nil {
-			fmt.Printf("error starting cocoon: %v", err)
-			return err
-		}
-
-		return nil
-	},
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level:     level,
+		AddSource: true,
+	})
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+	return logger
 }
 
-var runCreateRotationKey = &cli.Command{
-	Name:  "create-rotation-key",
-	Usage: "creates a rotation key for your pds",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:     "out",
-			Required: true,
-			Usage:    "output file for your rotation key",
-		},
-	},
-	Action: func(cmd *cli.Context) error {
-		key, err := atcrypto.GeneratePrivateKeyK256()
-		if err != nil {
-			return err
+func startMetrics(v *viper.Viper) {
+	addr := v.GetString(flagMetricsListenAddress)
+	if addr == "" {
+		return
+	}
+	logger := slog.Default().With("component", "telemetry")
+	logger.Info("starting metrics server", "address", addr)
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+	go func() {
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			logger.Error("metrics server failed", "err", err)
 		}
-
-		bytes := key.Bytes()
-
-		if err := os.WriteFile(cmd.String("out"), bytes, 0644); err != nil {
-			return err
-		}
-
-		return nil
-	},
+	}()
 }
 
-var runCreatePrivateJwk = &cli.Command{
-	Name:  "create-private-jwk",
-	Usage: "creates a private jwk for your pds",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:     "out",
-			Required: true,
-			Usage:    "output file for your jwk",
-		},
-	},
-	Action: func(cmd *cli.Context) error {
-		privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return err
-		}
-
-		key, err := jwk.FromRaw(privKey)
-		if err != nil {
-			return err
-		}
-
-		kid := fmt.Sprintf("%d", time.Now().Unix())
-
-		if err := key.Set(jwk.KeyIDKey, kid); err != nil {
-			return err
-		}
-
-		b, err := json.Marshal(key)
-		if err != nil {
-			return err
-		}
-
-		if err := os.WriteFile(cmd.String("out"), b, 0644); err != nil {
-			return err
-		}
-
-		return nil
-	},
-}
-
-var runCreateInviteCode = &cli.Command{
-	Name:  "create-invite-code",
-	Usage: "creates an invite code",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:  "for",
-			Usage: "optional did to assign the invite code to",
-		},
-		&cli.IntFlag{
-			Name:  "uses",
-			Usage: "number of times the invite code can be used",
-			Value: 1,
-		},
-	},
-	Action: func(cmd *cli.Context) error {
-		db, err := newDb(cmd)
-		if err != nil {
-			return err
-		}
-
-		forDid := "did:plc:123"
-		if cmd.String("for") != "" {
-			did, err := syntax.ParseDID(cmd.String("for"))
-			if err != nil {
-				return err
-			}
-
-			forDid = did.String()
-		}
-
-		uses := cmd.Int("uses")
-
-		code := fmt.Sprintf("%s-%s", helpers.RandomVarchar(8), helpers.RandomVarchar(8))
-
-		if err := db.Exec("INSERT INTO invite_codes (did, code, remaining_use_count) VALUES (?, ?, ?)", forDid, code, uses).Error; err != nil {
-			return err
-		}
-
-		fmt.Printf("New invite code created with %d uses: %s\n", uses, code)
-
-		return nil
-	},
-}
-
-var runResetPassword = &cli.Command{
-	Name:  "reset-password",
-	Usage: "resets a password",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:  "did",
-			Usage: "did of the user who's password you want to reset",
-		},
-	},
-	Action: func(cmd *cli.Context) error {
-		db, err := newDb(cmd)
-		if err != nil {
-			return err
-		}
-
-		didStr := cmd.String("did")
-		did, err := syntax.ParseDID(didStr)
-		if err != nil {
-			return err
-		}
-
-		newPass := fmt.Sprintf("%s-%s", helpers.RandomVarchar(12), helpers.RandomVarchar(12))
-		hashed, err := bcrypt.GenerateFromPassword([]byte(newPass), 10)
-		if err != nil {
-			return err
-		}
-
-		if err := db.Exec("UPDATE repos SET password = ? WHERE did = ?", hashed, did.String()).Error; err != nil {
-			return err
-		}
-
-		fmt.Printf("Password for %s has been reset to: %s", did.String(), newPass)
-
-		return nil
-	},
-}
-
-func newDb(cmd *cli.Context) (*gorm.DB, error) {
-	dbName := cmd.String("db-name")
+func newDb(v *viper.Viper) (*gorm.DB, error) {
+	dbName := v.GetString(flagDbName)
 	if dbName == "" {
 		dbName = "cocoon.db"
 	}
 	return gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+}
+
+func newServeCmd(v *viper.Viper) *cobra.Command {
+	return &cobra.Command{
+		Use:   "run",
+		Short: "Start the cocoon PDS",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			logger := buildLogger(v)
+			startMetrics(v)
+
+			s, err := server.New(&server.Args{
+				Logger:          logger,
+				Addr:            v.GetString(flagAddr),
+				DbName:          v.GetString(flagDbName),
+				Did:             v.GetString(flagDid),
+				Hostname:        v.GetString(flagHostname),
+				RotationKeyPath: v.GetString(flagRotationKeyPath),
+				JwkPath:         v.GetString(flagJwkPath),
+				ContactEmail:    v.GetString(flagContactEmail),
+				Version:         Version,
+				Relays:          v.GetStringSlice(flagRelays),
+				AdminPassword:   v.GetString(flagAdminPassword),
+				RequireInvite:   v.GetBool(flagRequireInvite),
+				SmtpUser:        v.GetString(flagSmtpUser),
+				SmtpPass:        v.GetString(flagSmtpPass),
+				SmtpHost:        v.GetString(flagSmtpHost),
+				SmtpPort:        v.GetString(flagSmtpPort),
+				SmtpEmail:       v.GetString(flagSmtpEmail),
+				SmtpName:        v.GetString(flagSmtpName),
+				IPFSConfig: &server.IPFSConfig{
+					BlobstoreEnabled:    v.GetBool(flagIpfsBlobstoreEnabled),
+					NodeURL:             v.GetString(flagIpfsNodeUrl),
+					GatewayURL:          v.GetString(flagIpfsGatewayUrl),
+					PinningServiceURL:   v.GetString(flagIpfsPinningServiceUrl),
+					PinningServiceToken: v.GetString(flagIpfsPinningServiceToken),
+				},
+				SessionSecret:     v.GetString(flagSessionSecret),
+				SessionCookieKey:  v.GetString(flagSessionCookieKey),
+				BlockstoreVariant: server.MustReturnBlockstoreVariant(v.GetString(flagBlockstoreVariant)),
+				FallbackProxy:     v.GetString(flagFallbackProxy),
+			})
+			if err != nil {
+				return fmt.Errorf("error creating cocoon: %w", err)
+			}
+
+			if err := s.Serve(context.Background()); err != nil {
+				return fmt.Errorf("error starting cocoon: %w", err)
+			}
+
+			return nil
+		},
+	}
+}
+
+func newCreateRotationKeyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create-rotation-key",
+		Short: "Create a rotation key for your PDS",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, _ := cmd.Flags().GetString("out")
+
+			key, err := atcrypto.GeneratePrivateKeyK256()
+			if err != nil {
+				return err
+			}
+
+			if err := os.WriteFile(out, key.Bytes(), 0644); err != nil {
+				return err
+			}
+
+			fmt.Printf("Rotation key written to %s\n", out)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringP("out", "o", "", "Output file for the rotation key (required)")
+	_ = cmd.MarkFlagRequired("out")
+
+	return cmd
+}
+
+func newCreatePrivateJwkCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create-private-jwk",
+		Short: "Create a private JWK for your PDS",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, _ := cmd.Flags().GetString("out")
+
+			privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				return err
+			}
+
+			key, err := jwk.FromRaw(privKey)
+			if err != nil {
+				return err
+			}
+
+			if err := key.Set(jwk.KeyIDKey, fmt.Sprintf("%d", time.Now().Unix())); err != nil {
+				return err
+			}
+
+			b, err := json.Marshal(key)
+			if err != nil {
+				return err
+			}
+
+			if err := os.WriteFile(out, b, 0644); err != nil {
+				return err
+			}
+
+			fmt.Printf("Private JWK written to %s\n", out)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringP("out", "o", "", "Output file for the private JWK (required)")
+	_ = cmd.MarkFlagRequired("out")
+
+	return cmd
+}
+
+func newCreateInviteCodeCmd(v *viper.Viper) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create-invite-code",
+		Short: "Create an invite code",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := newDb(v)
+			if err != nil {
+				return err
+			}
+
+			forFlag, _ := cmd.Flags().GetString("for")
+			uses, _ := cmd.Flags().GetInt("uses")
+
+			forDid := "did:plc:123"
+			if forFlag != "" {
+				did, err := syntax.ParseDID(forFlag)
+				if err != nil {
+					return fmt.Errorf("invalid DID %q: %w", forFlag, err)
+				}
+				forDid = did.String()
+			}
+
+			code := fmt.Sprintf("%s-%s", helpers.RandomVarchar(8), helpers.RandomVarchar(8))
+
+			if err := db.Exec(
+				"INSERT INTO invite_codes (did, code, remaining_use_count) VALUES (?, ?, ?)",
+				forDid, code, uses,
+			).Error; err != nil {
+				return err
+			}
+
+			fmt.Printf("New invite code created with %d uses: %s\n", uses, code)
+			return nil
+		},
+	}
+
+	cmd.Flags().String("for", "", "Optional DID to assign the invite code to")
+	cmd.Flags().Int("uses", 1, "Number of times the invite code can be used")
+
+	return cmd
+}
+
+func newResetPasswordCmd(v *viper.Viper) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "reset-password",
+		Short: "Reset a user's password",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := newDb(v)
+			if err != nil {
+				return err
+			}
+
+			didStr, _ := cmd.Flags().GetString("did")
+			did, err := syntax.ParseDID(didStr)
+			if err != nil {
+				return fmt.Errorf("invalid DID %q: %w", didStr, err)
+			}
+
+			newPass := fmt.Sprintf("%s-%s", helpers.RandomVarchar(12), helpers.RandomVarchar(12))
+			hashed, err := bcrypt.GenerateFromPassword([]byte(newPass), 10)
+			if err != nil {
+				return err
+			}
+
+			if err := db.Exec(
+				"UPDATE repos SET password = ? WHERE did = ?",
+				hashed, did.String(),
+			).Error; err != nil {
+				return err
+			}
+
+			fmt.Printf("Password for %s has been reset to: %s\n", did.String(), newPass)
+			return nil
+		},
+	}
+
+	cmd.Flags().String("did", "", "DID of the user whose password to reset (required)")
+	_ = cmd.MarkFlagRequired("did")
+
+	return cmd
 }
