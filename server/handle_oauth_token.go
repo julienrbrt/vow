@@ -100,12 +100,6 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: this should come from an oauth provider config
-	if !slices.Contains([]string{"authorization_code", "refresh_token"}, req.GrantType) {
-		helpers.InputError(w, new(fmt.Sprintf(`"%s" grant type is not supported by the server`, req.GrantType)))
-		return
-	}
-
 	if !slices.Contains(client.Metadata.GrantTypes, req.GrantType) {
 		helpers.InputError(w, new(fmt.Sprintf(`"%s" grant type is not supported by the client`, req.GrantType)))
 		return

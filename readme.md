@@ -53,8 +53,8 @@ Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
 4. **Start the services**
 
    ```bash
-   docker-compose pull
-   docker-compose up -d
+   docker compose pull
+   docker compose up -d
    ```
 
 5. **Get your invite code**
@@ -62,7 +62,7 @@ Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
    On first run, an invite code is automatically created. View it with:
 
    ```bash
-   docker-compose logs create-invite
+   docker compose logs create-invite
    ```
 
    Or check the saved file:
@@ -73,7 +73,7 @@ Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
 
 6. **Monitor the services**
    ```bash
-   docker-compose logs -f
+   docker compose logs -f
    ```
 
 ### What Gets Set Up
@@ -146,8 +146,8 @@ docker exec vow-pds /vow reset-password --did "did:plc:xxx"
 ## Updating
 
 ```bash
-docker-compose pull
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 ## Implemented Endpoints

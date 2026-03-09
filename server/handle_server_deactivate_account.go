@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -29,7 +28,7 @@ func (s *Server) handleServerDeactivateAccount(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(ctx, &events.XRPCStreamEvent{
 		RepoAccount: &atproto.SyncSubscribeRepos_Account{
 			Active: false,
 			Did:    urepo.Repo.Did,

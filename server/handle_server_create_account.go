@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,7 +153,12 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: unsupported domains
+	// Validate that the handle's domain suffix matches the server hostname.
+	// Handles must be either exactly the hostname or end with a dot-prefixed hostname.
+	if !strings.HasSuffix(request.Handle, "."+s.config.Hostname) && request.Handle != s.config.Hostname {
+		helpers.InputError(w, new("UnsupportedDomain"))
+		return
+	}
 
 	var k *atcrypto.PrivateKeyK256
 
@@ -255,20 +259,20 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			RecordStore: bs,
 		}
 
-		root, rev, err := commitRepo(context.TODO(), bs, r, urepo.SigningKey)
+		root, rev, err := commitRepo(ctx, bs, r, urepo.SigningKey)
 		if err != nil {
 			logger.Error("error committing", "error", err)
 			helpers.ServerError(w, nil)
 			return
 		}
 
-		if err := s.UpdateRepo(context.TODO(), urepo.Did, root, rev); err != nil {
+		if err := s.UpdateRepo(ctx, urepo.Did, root, rev); err != nil {
 			logger.Error("error updating repo after commit", "error", err)
 			helpers.ServerError(w, nil)
 			return
 		}
 
-		if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+		if err := s.evtman.AddEvent(ctx, &events.XRPCStreamEvent{
 			RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 				Did:    urepo.Did,
 				Handle: new(request.Handle),

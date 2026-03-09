@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"slices"
@@ -58,13 +57,13 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	slices.Reverse(orderedBlocks)
 
-	if err := bs.PutMany(context.TODO(), orderedBlocks); err != nil {
+	if err := bs.PutMany(ctx, orderedBlocks); err != nil {
 		logger.Error("could not insert blocks", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
 
-	atRepo, err := openRepo(context.TODO(), bs, cs.Header.Roots[0], urepo.Repo.Did)
+	atRepo, err := openRepo(ctx, bs, cs.Header.Roots[0], urepo.Repo.Did)
 	if err != nil {
 		logger.Error("could not open repo", "error", err)
 		helpers.ServerError(w, nil)
@@ -80,7 +79,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 		nsid := pts[0]
 		rkey := pts[1]
 		cidStr := recordCid.String()
-		blkData, err := bs.Get(context.TODO(), recordCid)
+		blkData, err := bs.Get(ctx, recordCid)
 		if err != nil {
 			logger.Error("record bytes don't exist in blockstore", "error", err)
 			return err
@@ -109,14 +108,14 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	tx.Commit()
 
-	root, rev, err := commitRepo(context.TODO(), bs, atRepo, urepo.SigningKey)
+	root, rev, err := commitRepo(ctx, bs, atRepo, urepo.SigningKey)
 	if err != nil {
 		logger.Error("error committing", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
 
-	if err := s.UpdateRepo(context.TODO(), urepo.Repo.Did, root, rev); err != nil {
+	if err := s.UpdateRepo(ctx, urepo.Repo.Did, root, rev); err != nil {
 		logger.Error("error updating repo after commit", "error", err)
 		helpers.ServerError(w, nil)
 		return

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -154,7 +153,7 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(ctx, &events.XRPCStreamEvent{
 		RepoAccount: &atproto.SyncSubscribeRepos_Account{
 			Active: false,
 			Did:    req.Did,

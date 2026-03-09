@@ -18,6 +18,9 @@ import (
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
+// supportedScopes lists the OAuth scopes this server accepts.
+var supportedScopes = []string{"atproto", "transition:generic", "transition:chat.bsky"}
+
 type Manager struct {
 	cli           *http.Client
 	logger        *slog.Logger
@@ -59,18 +62,10 @@ func (cm *Manager) GetClient(ctx context.Context, clientId string) (*Client, err
 	var jwks jwk.Key
 	if metadata.TokenEndpointAuthMethod == "private_key_jwt" {
 		if metadata.JWKS != nil && len(metadata.JWKS.Keys) > 0 {
-			// TODO: this is kinda bad but whatever for now. there could obviously be more than one jwk, and we need to
-			// make sure we use the right one
-			b, err := json.Marshal(metadata.JWKS.Keys[0])
+			k, err := selectKey(metadata.JWKS.Keys, metadata.TokenEndpointAuthSigningAlg)
 			if err != nil {
 				return nil, err
 			}
-
-			k, err := helpers.ParseJWKFromBytes(b)
-			if err != nil {
-				return nil, err
-			}
-
 			jwks = k
 		} else if metadata.JWKSURI != nil {
 			maybeJwks, err := cm.getClientJwks(ctx, clientId, *metadata.JWKSURI)
@@ -147,7 +142,7 @@ func (cm *Manager) getClientJwks(ctx context.Context, clientId, jwksUri string) 
 		}
 
 		type Keys struct {
-			Keys []map[string]any `json:"keys"`
+			Keys []any `json:"keys"`
 		}
 
 		var keys Keys
@@ -159,13 +154,7 @@ func (cm *Manager) getClientJwks(ctx context.Context, clientId, jwksUri string) 
 			return nil, errors.New("no keys in jwks response")
 		}
 
-		// TODO: this is again bad, we should be figuring out which one we need to use...
-		b, err := json.Marshal(keys.Keys[0])
-		if err != nil {
-			return nil, fmt.Errorf("could not marshal key: %w", err)
-		}
-
-		k, err := helpers.ParseJWKFromBytes(b)
+		k, err := selectKey(keys.Keys, "")
 		if err != nil {
 			return nil, err
 		}
@@ -174,6 +163,57 @@ func (cm *Manager) getClientJwks(ctx context.Context, clientId, jwksUri string) 
 	}
 
 	return jwks, nil
+}
+
+// selectKey picks the best signing key from a raw JWKS key list.
+// It prefers a key whose "kid" matches the hint (if non-empty), then any key
+// with "use"="sig", and finally falls back to the first key in the set.
+func selectKey(keys []any, kidHint string) (jwk.Key, error) {
+	if len(keys) == 0 {
+		return nil, errors.New("empty jwks")
+	}
+
+	asMap := func(v any) map[string]any {
+		m, _ := v.(map[string]any)
+		return m
+	}
+
+	var chosen map[string]any
+
+	if kidHint != "" {
+		for _, k := range keys {
+			m := asMap(k)
+			if m["kid"] == kidHint {
+				chosen = m
+				break
+			}
+		}
+	}
+
+	if chosen == nil {
+		for _, k := range keys {
+			m := asMap(k)
+			if use, _ := m["use"].(string); use == "sig" {
+				chosen = m
+				break
+			}
+		}
+	}
+
+	if chosen == nil {
+		chosen = asMap(keys[0])
+	}
+
+	if chosen == nil {
+		return nil, errors.New("jwks contains no usable keys")
+	}
+
+	b, err := json.Marshal(chosen)
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal key: %w", err)
+	}
+
+	return helpers.ParseJWKFromBytes(b)
 }
 
 func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
@@ -246,7 +286,9 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 			return nil, fmt.Errorf("duplicate scope `%s`", scope)
 		}
 
-		// TODO: check for unsupported scopes
+		if !slices.Contains(supportedScopes, scope) {
+			return nil, fmt.Errorf("unsupported scope %q", scope)
+		}
 
 		scopesMap[scope] = true
 	}
@@ -259,11 +301,11 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 
 		switch gt {
 		case "implicit":
-			return nil, errors.New("grantg type `implicit` is not allowed")
+			return nil, errors.New("grant type `implicit` is not allowed")
 		case "authorization_code", "refresh_token":
-			// TODO check if this grant type is supported
+			// supported
 		default:
-			return nil, fmt.Errorf("grant tyhpe `%s` is not supported", gt)
+			return nil, fmt.Errorf("grant type `%s` is not supported", gt)
 		}
 
 		grantTypesMap[gt] = true

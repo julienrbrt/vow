@@ -2,9 +2,11 @@ package server
 
 import (
 	"net/http"
+	"strconv"
 
-	"pkg.rbrt.fr/vow/models"
 	"github.com/ipfs/go-cid"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoSyncListReposResponse struct {
@@ -20,21 +22,43 @@ type ComAtprotoSyncListReposRepoItem struct {
 	Status *string `json:"status,omitempty"`
 }
 
-// TODO: paginate this bitch
 func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	limit := 500
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	cursor := r.URL.Query().Get("cursor")
+
+	params := []any{}
+	cursorClause := ""
+	if cursor != "" {
+		cursorClause = "WHERE did > ?"
+		params = append(params, cursor)
+	}
+	params = append(params, limit+1)
+
 	var repos []models.Repo
-	if err := s.db.Raw(ctx, "SELECT * FROM repos ORDER BY created_at DESC LIMIT 500", nil).Scan(&repos).Error; err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.db.Raw(ctx, "SELECT * FROM repos "+cursorClause+" ORDER BY did ASC LIMIT ?", nil, params...).Scan(&repos).Error; err != nil {
+		helpers.ServerError(w, nil)
 		return
+	}
+
+	var nextCursor *string
+	if len(repos) > limit {
+		repos = repos[:limit]
+		nextCursor = &repos[len(repos)-1].Did
 	}
 
 	items := make([]ComAtprotoSyncListReposRepoItem, 0, len(repos))
 	for _, repo := range repos {
 		c, err := cid.Cast(repo.Root)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			helpers.ServerError(w, nil)
 			return
 		}
 
@@ -48,7 +72,7 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, 200, ComAtprotoSyncListReposResponse{
-		Cursor: nil,
+		Cursor: nextCursor,
 		Repos:  items,
 	})
 }

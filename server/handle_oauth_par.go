@@ -62,8 +62,13 @@ func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: this seems wrong. should be a way to get the entire request url i believe, but this will work for now
-	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, nil)
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
+		scheme = "http"
+	} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, scheme+"://"+r.Host+r.URL.String(), r.Header, nil)
 	if err != nil {
 		if errors.Is(err, dpop.ErrUseDpopNonce) {
 			nonce := s.oauthProvider.NextNonce()

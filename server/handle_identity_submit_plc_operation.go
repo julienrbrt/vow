@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -22,6 +21,7 @@ type ComAtprotoSubmitPlcOperationRequest struct {
 }
 
 func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleIdentitySubmitPlcOperation")
 
 	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
@@ -86,11 +86,11 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.passport.BustDoc(context.TODO(), repo.Repo.Did); err != nil {
+	if err := s.passport.BustDoc(ctx, repo.Repo.Did); err != nil {
 		logger.Warn("error busting did doc", "error", err)
 	}
 
-	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(ctx, &events.XRPCStreamEvent{
 		RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 			Did:  repo.Repo.Did,
 			Seq:  time.Now().UnixMicro(), // TODO: no

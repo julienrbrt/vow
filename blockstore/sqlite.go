@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bluesky-social/indigo/atproto/syntax"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"gorm.io/gorm/clause"
@@ -17,6 +16,7 @@ import (
 type SqliteBlockstore struct {
 	db       *db.DB
 	did      string
+	rev      string
 	readonly bool
 	inserts  map[cid.Cid]blocks.Block
 }
@@ -37,6 +37,13 @@ func NewReadOnly(did string, db *db.DB) *SqliteBlockstore {
 		readonly: true,
 		inserts:  map[cid.Cid]blocks.Block{},
 	}
+}
+
+// SetRev sets the revision that will be stamped on every block written to the
+// store. It should be called with the new repo revision before any Put/PutMany
+// calls for a given commit.
+func (bs *SqliteBlockstore) SetRev(rev string) {
+	bs.rev = rev
 }
 
 func (bs *SqliteBlockstore) Get(ctx context.Context, cid cid.Cid) (blocks.Block, error) {
@@ -69,7 +76,7 @@ func (bs *SqliteBlockstore) Put(ctx context.Context, block blocks.Block) error {
 	b := models.Block{
 		Did:   bs.did,
 		Cid:   block.Cid().Bytes(),
-		Rev:   syntax.NewTIDNow(0).String(), // TODO: WARN, this is bad. don't do this
+		Rev:   bs.rev,
 		Value: block.RawData(),
 	}
 
@@ -108,7 +115,7 @@ func (bs *SqliteBlockstore) PutMany(ctx context.Context, blocks []blocks.Block) 
 		b := models.Block{
 			Did:   bs.did,
 			Cid:   block.Cid().Bytes(),
-			Rev:   syntax.NewTIDNow(0).String(), // TODO: WARN, this is bad. don't do this
+			Rev:   bs.rev,
 			Value: block.RawData(),
 		}
 

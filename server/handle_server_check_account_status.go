@@ -3,9 +3,9 @@ package server
 import (
 	"net/http"
 
+	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	"github.com/ipfs/go-cid"
 )
 
 type ComAtprotoServerCheckAccountStatusResponse struct {
@@ -27,10 +27,9 @@ func (s *Server) handleServerCheckAccountStatus(w http.ResponseWriter, r *http.R
 	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	resp := ComAtprotoServerCheckAccountStatusResponse{
-		Activated:     true, // TODO: should allow for deactivation etc.
-		ValidDid:      true, // TODO: should probably verify?
-		RepoRev:       urepo.Rev,
-		ImportedBlobs: 0, // TODO: ???
+		Activated: urepo.Active(),
+		ValidDid:  urepo.Root != nil,
+		RepoRev:   urepo.Rev,
 	}
 
 	rootcid, err := cid.Cast(urepo.Root)
@@ -68,6 +67,7 @@ func (s *Server) handleServerCheckAccountStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 	resp.ExpectedBlobs = blobCtResp.Ct
+	resp.ImportedBlobs = blobCtResp.Ct
 
 	s.writeJSON(w, 200, resp)
 }

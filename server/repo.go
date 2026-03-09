@@ -169,11 +169,13 @@ func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, di
 	}, nil
 }
 
-func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
-	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
-		return cid.Undef, "", fmt.Errorf("writing MST blocks: %w", err)
-	}
+// revSetter is implemented by blockstores that can be told the current repo
+// revision before blocks are written (so the Rev column is stamped correctly).
+type revSetter interface {
+	SetRev(rev string)
+}
 
+func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
 	commit, err := r.Commit()
 	if err != nil {
 		return cid.Undef, "", fmt.Errorf("creating commit: %w", err)
@@ -185,6 +187,16 @@ func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, sign
 	}
 	if err := commit.Sign(privkey); err != nil {
 		return cid.Undef, "", fmt.Errorf("signing commit: %w", err)
+	}
+
+	// Stamp the revision on the blockstore before writing any blocks so that
+	// every block persisted for this commit carries the correct Rev value.
+	if rs, ok := bs.(revSetter); ok {
+		rs.SetRev(commit.Rev)
+	}
+
+	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
+		return cid.Undef, "", fmt.Errorf("writing MST blocks: %w", err)
 	}
 
 	buf := new(bytes.Buffer)
@@ -331,9 +343,8 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 					return cid.Undef, err
 				}
 
-				// TODO: this is really confusing, and looking at it i have no idea why i did this. below when we are doing deletes, we
-				// check if `cid` here is nil to indicate if we should delete. that really doesn't make much sense and its super illogical
-				// when reading this code. i dont feel like fixing right now though so
+				// A nil Cid on the entry is the sentinel used later in the
+				// batch-upsert loop to distinguish deletes from creates/updates.
 				entries = append(entries, models.Record{
 					Did:   urepo.Did,
 					Nsid:  op.Collection,
@@ -504,7 +515,6 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				return nil, err
 			}
 
-			// TODO:
 			cids, err = rm.decrementBlobRefs(ctx, urepo, entry.Value)
 			if err != nil {
 				return nil, err
