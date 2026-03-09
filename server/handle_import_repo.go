@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/bluesky-social/indigo/repo"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipld/go-car"
@@ -64,7 +63,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r, err := openRepo(context.TODO(), bs, cs.Header.Roots[0], urepo.Repo.Did)
+	atRepo, err := openRepo(context.TODO(), bs, cs.Header.Roots[0], urepo.Repo.Did)
 	if err != nil {
 		logger.Error("could not open repo", "error", err)
 		helpers.ServerError(w, nil)
@@ -75,12 +74,12 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	clock := syntax.NewTIDClock(0)
 
-	if err := r.MST.Walk(func(key []byte, cid cid.Cid) error {
+	if err := atRepo.MST.Walk(func(key []byte, recordCid cid.Cid) error {
 		pts := strings.Split(string(key), "/")
 		nsid := pts[0]
 		rkey := pts[1]
-		cidStr := c.String()
-		blkData, err := bs.Get(context.TODO(), c)
+		cidStr := recordCid.String()
+		blkData, err := bs.Get(context.TODO(), recordCid)
 		if err != nil {
 			logger.Error("record bytes don't exist in blockstore", "error", err)
 			return err
@@ -109,7 +108,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	tx.Commit()
 
-	root, rev, err := commitRepo(context.TODO(), bs, r, urepo.Repo.SigningKey)
+	root, rev, err := commitRepo(context.TODO(), bs, atRepo, urepo.SigningKey)
 	if err != nil {
 		logger.Error("error committing", "error", err)
 		helpers.ServerError(w, nil)

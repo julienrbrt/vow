@@ -19,11 +19,12 @@ import (
 	"github.com/bluesky-social/indigo/carstore"
 	"github.com/bluesky-social/indigo/events"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
-	"github.com/bluesky-social/indigo/repo"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
+	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
+	"github.com/multiformats/go-multihash"
 	"gorm.io/gorm/clause"
 	"pkg.rbrt.fr/vow/internal/db"
 	"pkg.rbrt.fr/vow/metrics"
@@ -143,7 +144,7 @@ type RepoCommit struct {
 	Rev string `json:"rev"`
 }
 
-func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, did string) (*atp.Repo, error) {
+func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, did string) (*atp.Repo, error) { //nolint:staticcheck
 	commitBlock, err := bs.Get(ctx, rootCid)
 	if err != nil {
 		return nil, fmt.Errorf("reading commit block: %w", err)
@@ -168,7 +169,7 @@ func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, di
 	}, nil
 }
 
-func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
+func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) { //nolint:staticcheck
 	if _, err := r.MST.WriteDiffBlocks(ctx, bs); err != nil {
 		return cid.Undef, "", fmt.Errorf("writing MST blocks: %w", err)
 	}
@@ -208,7 +209,7 @@ func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, sign
 	return commitCid, commit.Rev, nil
 }
 
-func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *MarshalableMap) (cid.Cid, error) {
+func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *MarshalableMap) (cid.Cid, error) { //nolint:staticcheck
 	buf := new(bytes.Buffer)
 	if err := rec.MarshalCBOR(buf); err != nil {
 		return cid.Undef, err
@@ -240,13 +241,6 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 
 	dbs := rm.s.getBlockstore(urepo.Did)
 	bs := recording_blockstore.New(dbs)
-<<<<<<< HEAD
-=======
-	r, err := repo.OpenRepo(ctx, bs, rootcid)
-	if err != nil {
-		return nil, fmt.Errorf("error opening repo: %w", err)
-	}
->>>>>>> 4a24227 (refactor: fix lint + configure tangled ci)
 
 	var results []ApplyWriteResult
 	var ops []*atp.Operation
