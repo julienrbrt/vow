@@ -1,8 +1,5 @@
 SHELL = /bin/bash
 .SHELLFLAGS = -o pipefail -c
-GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null)
-GIT_COMMIT := $(shell git rev-parse --short=9 HEAD)
-VERSION := $(if $(GIT_TAG),$(GIT_TAG),dev-$(GIT_COMMIT))
 
 # Build output directory
 BUILD_DIR := dist
@@ -11,15 +8,7 @@ BUILD_DIR := dist
 PLATFORMS := \
 	linux/amd64 \
 	linux/arm64 \
-	linux/arm \
-	darwin/amd64 \
-	darwin/arm64 \
-	windows/amd64 \
-	windows/arm64 \
-	freebsd/amd64 \
-	freebsd/arm64 \
-	openbsd/amd64 \
-	openbsd/arm64
+	linux/arm
 
 .PHONY: help
 help: ## Print info about all commands
@@ -28,34 +17,30 @@ help: ## Print info about all commands
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[01;32m%-20s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build all executables
-	go build -ldflags "-X main.Version=$(VERSION)" -o vow ./cmd/vow
+build: ## Build the vow binary
+	go build -o vow ./cmd/vow
 
-.PHONY: build-release
+.PHONY: build-all
 build-all: ## Build binaries for all architectures
 	@echo "Building for all architectures..."
 	@mkdir -p $(BUILD_DIR)
 	@$(foreach platform,$(PLATFORMS), \
 		$(eval OS := $(word 1,$(subst /, ,$(platform)))) \
 		$(eval ARCH := $(word 2,$(subst /, ,$(platform)))) \
-		$(eval EXT := $(if $(filter windows,$(OS)),.exe,)) \
-		$(eval OUTPUT := $(BUILD_DIR)/vow-$(VERSION)-$(OS)-$(ARCH)$(EXT)) \
+		$(eval OUTPUT := $(BUILD_DIR)/vow-$(OS)-$(ARCH)) \
 		echo "Building $(OS)/$(ARCH)..."; \
-		GOOS=$(OS) GOARCH=$(ARCH) go build -ldflags "-X main.Version=$(VERSION)" -o $(OUTPUT) ./cmd/vow && \
+		GOOS=$(OS) GOARCH=$(ARCH) go build -o $(OUTPUT) ./cmd/vow && \
 		echo "  ✓ $(OUTPUT)" || echo "  ✗ Failed: $(OS)/$(ARCH)"; \
 	)
 	@echo "Done! Binaries are in $(BUILD_DIR)/"
 
-.PHONY: clean-dist
-clean-dist: ## Remove all built binaries
-	rm -rf $(BUILD_DIR)
+.PHONY: clean
+clean: ## Remove built binaries
+	rm -rf $(BUILD_DIR) vow
 
 .PHONY: run
-run:
-	go build -ldflags "-X main.Version=dev-local" -o vow ./cmd/vow && ./vow run
-
-.PHONY: all
-all: build
+run: ## Build and run the PDS
+	go run ./cmd/vow run
 
 .PHONY: test
 test: ## Run tests
@@ -73,16 +58,13 @@ lint-install: ## Install golangci-lint
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 .PHONY: fmt
-fmt: ## Run syntax re-formatting (modify in place)
+fmt: ## Format code
 	go fmt ./...
 
 .PHONY: check
 check: ## Compile everything, checking syntax (does not output binaries)
 	go build ./...
 
-.env:
-	if [ ! -f ".env" ]; then cp example.dev.env .env; fi
-
 .PHONY: docker-build
-docker-build:
+docker-build: ## Build the Docker image
 	docker build -t vow .

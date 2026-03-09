@@ -11,6 +11,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -28,7 +29,21 @@ import (
 	"pkg.rbrt.fr/vow/server"
 )
 
-var Version = "dev"
+var version = func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+			return s.Value[:7]
+		}
+	}
+	return "dev"
+}()
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -39,7 +54,7 @@ func main() {
 var rootCmd = &cobra.Command{
 	Use:           "vow",
 	Short:         "An atproto PDS",
-	Version:       Version,
+	Version:       version,
 	SilenceErrors: true,
 	SilenceUsage:  true,
 }
@@ -162,7 +177,7 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 				RotationKeyPath: v.GetString(flagRotationKeyPath),
 				JwkPath:         v.GetString(flagJwkPath),
 				ContactEmail:    v.GetString(flagContactEmail),
-				Version:         Version,
+				Version:         version,
 				Relays:          v.GetStringSlice(flagRelays),
 				AdminPassword:   v.GetString(flagAdminPassword),
 				RequireInvite:   v.GetBool(flagRequireInvite),

@@ -5,6 +5,13 @@
 
 Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
 
+## Incoming Features
+
+- [ ] **BYOK (Bring Your Own Key) for PDS** — users supply their own signing key for their PDS, keeping full custody of their identity.
+- [ ] **IPFS for account storage** — repository data is stored on IPFS, giving users a decentralised and portable data layer.
+- [ ] **x402 payments for IPFS storage** — IPFS pinning costs are settled via [x402](https://x402.org), paid directly by the user. The payment key is derived from the user's EVM wallet, so no separate key management is required.
+- [ ] **Extension for action signing** — a browser extension intercepts each write operation sent to the user's PDS and prompts the user to sign it locally, so private keys never leave the client.
+
 ## Quick Start with Docker Compose
 
 ### Prerequisites
@@ -214,4 +221,25 @@ docker-compose up -d
 
 ## License
 
-MIT. `server/static/pico.css` is also MIT licensed, available at [https://github.com/picocss/pico/](https://github.com/picocss/pico/).
+[MIT](license). `server/static/pico.css` is also MIT licensed, available at [https://github.com/picocss/pico/](https://github.com/picocss/pico/).
+
+## Thanks
+
+Vow is based on [Cocoon](https://tangled.org/hailey.at/cocoon). Many thanks for the solid foundation.
+
+### Vow vs Cocoon
+
+| Feature                      | Vow         | Cocoon |
+| ---------------------------- | ----------- | ------ |
+| Language                     | Go          | Go     |
+| SQLite blockstore            | ✅          | ✅     |
+| PostgreSQL support           | ❌ removed  | ✅     |
+| S3 blob storage              | ❌ removed  | ✅     |
+| S3 database backups          | ❌ removed  | ✅     |
+| IPFS blob storage            | ✅ (Kubo)   | ❌     |
+| IPFS account storage         | 🔜 incoming | ❌     |
+| BYOK (Bring Your Own Key)    | 🔜 incoming | ❌     |
+| x402 payments for IPFS       | 🔜 incoming | ❌     |
+| Extension for action signing | 🔜 incoming | ❌     |
+
+Vow trades Cocoon's operational storage flexibility (PostgreSQL, S3) for a leaner SQLite-only core, with a roadmap focused on decentralised storage and user-controlled keys.
