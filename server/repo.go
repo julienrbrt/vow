@@ -672,8 +672,10 @@ func (rm *RepoMan) decrementBlobRefs(ctx context.Context, urepo models.Repo, cbo
 			return nil, err
 		}
 
-		// TODO: this does _not_ handle deletions of blobs that are on s3 storage!!!! we need to get the blob, see what
-		// storage it is in, and clean up s3!!!!
+		// TODO: blobs with storage == "ipfs" are not unpinned from the local
+		// IPFS node or the remote pinning service when their ref_count reaches
+		// zero. A future cleanup pass should call /api/v0/pin/rm on the local
+		// node and DELETE /pins/<requestid> on the remote pinning service.
 		if res.Count == 0 {
 			if err := rm.db.Exec(ctx, "DELETE FROM blobs WHERE id = ?", nil, res.ID).Error; err != nil {
 				return nil, err

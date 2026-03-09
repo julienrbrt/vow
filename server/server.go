@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"embed"
@@ -17,16 +16,13 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/domodwyer/mailyak/v3"
+	"github.com/glebarez/sqlite"
 	"github.com/go-playground/validator"
 	"github.com/gorilla/sessions"
 	"github.com/haileyok/cocoon/identity"
@@ -44,8 +40,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	slogecho "github.com/samber/slog-echo"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -53,15 +47,32 @@ const (
 	AccountSessionMaxAge = 30 * 24 * time.Hour // one week
 )
 
-type S3Config struct {
-	BackupsEnabled   bool
+// IPFSConfig holds configuration for IPFS pinning-based blob storage.
+// Blobs are added to an IPFS node via the Kubo HTTP RPC API and optionally
+// pinned to a remote pinning service that implements the IPFS Pinning Service
+// API spec (e.g. Pinata, web3.storage, Infura).
+type IPFSConfig struct {
+	// BlobstoreEnabled controls whether blobs are stored on IPFS instead of
+	// SQLite.
 	BlobstoreEnabled bool
-	Endpoint         string
-	Region           string
-	Bucket           string
-	AccessKey        string
-	SecretKey        string
-	CDNUrl           string
+
+	// NodeURL is the base URL of the Kubo (go-ipfs) RPC API used for adding
+	// blobs, e.g. "http://127.0.0.1:5001".
+	NodeURL string
+
+	// GatewayURL is the base URL of the IPFS gateway used to serve blobs, e.g.
+	// "https://ipfs.io" or your own gateway. When set, getBlob redirects to
+	// this URL instead of fetching the content through the node.
+	GatewayURL string
+
+	// PinningServiceURL is the URL of a remote IPFS Pinning Service API
+	// endpoint, e.g. "https://api.pinata.cloud/psa". Leave empty to skip
+	// remote pinning.
+	PinningServiceURL string
+
+	// PinningServiceToken is the Bearer token used to authenticate with the
+	// remote pinning service.
+	PinningServiceToken string
 }
 
 type Server struct {
@@ -84,9 +95,8 @@ type Server struct {
 	lastRequestCrawl time.Time
 	requestCrawlMu   sync.Mutex
 
-	dbName   string
-	dbType   string
-	s3Config *S3Config
+	dbName     string
+	ipfsConfig *IPFSConfig
 }
 
 type Args struct {
@@ -95,8 +105,6 @@ type Args struct {
 	LogLevel        slog.Level
 	Addr            string
 	DbName          string
-	DbType          string
-	DatabaseURL     string
 	Version         string
 	Did             string
 	Hostname        string
@@ -114,7 +122,7 @@ type Args struct {
 	SmtpEmail string
 	SmtpName  string
 
-	S3Config *S3Config
+	IPFSConfig *IPFSConfig
 
 	SessionSecret    string
 	SessionCookieKey string
@@ -332,33 +340,15 @@ func New(args *Args) (*Server, error) {
 		IdleTimeout:  5 * time.Minute,
 	}
 
-	dbType := args.DbType
-	if dbType == "" {
-		dbType = "sqlite"
-	}
-
 	var gdb *gorm.DB
 	var err error
-	switch dbType {
-	case "postgres":
-		if args.DatabaseURL == "" {
-			return nil, fmt.Errorf("database-url must be set when using postgres")
-		}
-		gdb, err = gorm.Open(postgres.Open(args.DatabaseURL), &gorm.Config{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to postgres: %w", err)
-		}
-		logger.Info("connected to PostgreSQL database")
-	default:
-		gdb, err = gorm.Open(sqlite.Open(args.DbName), &gorm.Config{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to open sqlite database: %w", err)
-		}
-		gdb.Exec("PRAGMA journal_mode=WAL")
-		gdb.Exec("PRAGMA synchronous=NORMAL")
-
-		logger.Info("connected to SQLite database", "path", args.DbName)
+	gdb, err = gorm.Open(sqlite.Open(args.DbName), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
+	gdb.Exec("PRAGMA journal_mode=WAL")
+	gdb.Exec("PRAGMA synchronous=NORMAL")
+	logger.Info("connected to SQLite database", "path", args.DbName)
 	dbw := db.NewDB(gdb)
 
 	rkbytes, err := os.ReadFile(args.RotationKeyPath)
@@ -437,9 +427,8 @@ func New(args *Args) (*Server, error) {
 		evtman:   events.NewEventManager(evtPersister),
 		passport: identity.NewPassport(h, identity.NewMemCache(10_000)),
 
-		dbName:   args.DbName,
-		dbType:   dbType,
-		s3Config: args.S3Config,
+		dbName:     args.DbName,
+		ipfsConfig: args.IPFSConfig,
 
 		oauthProvider: provider.NewProvider(provider.Args{
 			Hostname: args.Hostname,
@@ -611,8 +600,6 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}()
 
-	go s.backupRoutine()
-
 	go func() {
 		if err := s.requestCrawl(ctx); err != nil {
 			logger.Error("error requesting crawls", "err", err)
@@ -653,119 +640,6 @@ func (s *Server) requestCrawl(ctx context.Context) error {
 	s.lastRequestCrawl = time.Now()
 
 	return nil
-}
-
-func (s *Server) doBackup() {
-	logger := s.logger.With("name", "doBackup")
-
-	if s.dbType == "postgres" {
-		logger.Info("skipping S3 backup - PostgreSQL backups should be handled externally (pg_dump, managed database backups, etc.)")
-		return
-	}
-
-	start := time.Now()
-
-	logger.Info("beginning backup to s3...")
-
-	tmpFile := fmt.Sprintf("/tmp/cocoon-backup-%s.db", time.Now().Format(time.RFC3339Nano))
-	defer os.Remove(tmpFile)
-
-	if err := s.db.Client().Exec(fmt.Sprintf("VACUUM INTO '%s'", tmpFile)).Error; err != nil {
-		logger.Error("error creating tmp backup file", "err", err)
-		return
-	}
-
-	backupData, err := os.ReadFile(tmpFile)
-	if err != nil {
-		logger.Error("error reading tmp backup file", "err", err)
-		return
-	}
-
-	logger.Info("sending to s3...")
-
-	currTime := time.Now().Format("2006-01-02_15-04-05")
-	key := "cocoon-backup-" + currTime + ".db"
-
-	config := &aws.Config{
-		Region:      aws.String(s.s3Config.Region),
-		Credentials: credentials.NewStaticCredentials(s.s3Config.AccessKey, s.s3Config.SecretKey, ""),
-	}
-
-	if s.s3Config.Endpoint != "" {
-		config.Endpoint = aws.String(s.s3Config.Endpoint)
-		config.S3ForcePathStyle = aws.Bool(true)
-	}
-
-	sess, err := session.NewSession(config)
-	if err != nil {
-		logger.Error("error creating s3 session", "err", err)
-		return
-	}
-
-	svc := s3.New(sess)
-
-	if _, err := svc.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.s3Config.Bucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader(backupData),
-	}); err != nil {
-		logger.Error("error uploading file to s3", "err", err)
-		return
-	}
-
-	logger.Info("finished uploading backup to s3", "key", key, "duration", time.Since(start).Seconds())
-
-	os.WriteFile("last-backup.txt", []byte(time.Now().Format(time.RFC3339Nano)), 0644)
-}
-
-func (s *Server) backupRoutine() {
-	logger := s.logger.With("name", "backupRoutine")
-
-	if s.s3Config == nil || !s.s3Config.BackupsEnabled {
-		return
-	}
-
-	if s.s3Config.Region == "" {
-		logger.Warn("no s3 region configured but backups are enabled. backups will not run.")
-		return
-	}
-
-	if s.s3Config.Bucket == "" {
-		logger.Warn("no s3 bucket configured but backups are enabled. backups will not run.")
-		return
-	}
-
-	if s.s3Config.AccessKey == "" {
-		logger.Warn("no s3 access key configured but backups are enabled. backups will not run.")
-		return
-	}
-
-	if s.s3Config.SecretKey == "" {
-		logger.Warn("no s3 secret key configured but backups are enabled. backups will not run.")
-		return
-	}
-
-	shouldBackupNow := false
-	lastBackupStr, err := os.ReadFile("last-backup.txt")
-	if err != nil {
-		shouldBackupNow = true
-	} else {
-		lastBackup, err := time.Parse(time.RFC3339Nano, string(lastBackupStr))
-		if err != nil {
-			shouldBackupNow = true
-		} else if time.Since(lastBackup).Seconds() > 3600 {
-			shouldBackupNow = true
-		}
-	}
-
-	if shouldBackupNow {
-		go s.doBackup()
-	}
-
-	ticker := time.NewTicker(time.Hour)
-	for range ticker.C {
-		go s.doBackup()
-	}
 }
 
 func (s *Server) UpdateRepo(ctx context.Context, did string, root cid.Cid, rev string) error {

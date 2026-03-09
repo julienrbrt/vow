@@ -14,14 +14,13 @@ import (
 	"github.com/bluesky-social/go-util/pkg/telemetry"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
+	"github.com/glebarez/sqlite"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -42,18 +41,7 @@ func main() {
 				Value:   "cocoon.db",
 				EnvVars: []string{"COCOON_DB_NAME"},
 			},
-			&cli.StringFlag{
-				Name:    "db-type",
-				Value:   "sqlite",
-				Usage:   "Database type: sqlite or postgres",
-				EnvVars: []string{"COCOON_DB_TYPE"},
-			},
-			&cli.StringFlag{
-				Name:    "database-url",
-				Aliases: []string{"db-url"},
-				Usage:   "PostgreSQL connection string (required if db-type is postgres)",
-				EnvVars: []string{"COCOON_DATABASE_URL", "DATABASE_URL"},
-			},
+
 			&cli.StringFlag{
 				Name:    "did",
 				EnvVars: []string{"COCOON_DID"},
@@ -112,37 +100,30 @@ func main() {
 				EnvVars: []string{"COCOON_SMTP_NAME"},
 			},
 			&cli.BoolFlag{
-				Name:    "s3-backups-enabled",
-				EnvVars: []string{"COCOON_S3_BACKUPS_ENABLED"},
-			},
-			&cli.BoolFlag{
-				Name:    "s3-blobstore-enabled",
-				EnvVars: []string{"COCOON_S3_BLOBSTORE_ENABLED"},
+				Name:    "ipfs-blobstore-enabled",
+				EnvVars: []string{"COCOON_IPFS_BLOBSTORE_ENABLED"},
+				Usage:   "Store blobs on IPFS via the Kubo HTTP RPC API instead of SQLite.",
 			},
 			&cli.StringFlag{
-				Name:    "s3-region",
-				EnvVars: []string{"COCOON_S3_REGION"},
+				Name:    "ipfs-node-url",
+				EnvVars: []string{"COCOON_IPFS_NODE_URL"},
+				Value:   "http://127.0.0.1:5001",
+				Usage:   "Base URL of the Kubo (go-ipfs) RPC API used for adding and fetching blobs.",
 			},
 			&cli.StringFlag{
-				Name:    "s3-bucket",
-				EnvVars: []string{"COCOON_S3_BUCKET"},
+				Name:    "ipfs-gateway-url",
+				EnvVars: []string{"COCOON_IPFS_GATEWAY_URL"},
+				Usage:   "Public IPFS gateway URL for blob redirects (e.g., https://ipfs.io). When set, getBlob redirects to this URL instead of proxying through the node.",
 			},
 			&cli.StringFlag{
-				Name:    "s3-endpoint",
-				EnvVars: []string{"COCOON_S3_ENDPOINT"},
+				Name:    "ipfs-pinning-service-url",
+				EnvVars: []string{"COCOON_IPFS_PINNING_SERVICE_URL"},
+				Usage:   "Remote IPFS Pinning Service API endpoint (e.g., https://api.pinata.cloud/psa). Leave empty to skip remote pinning.",
 			},
 			&cli.StringFlag{
-				Name:    "s3-access-key",
-				EnvVars: []string{"COCOON_S3_ACCESS_KEY"},
-			},
-			&cli.StringFlag{
-				Name:    "s3-secret-key",
-				EnvVars: []string{"COCOON_S3_SECRET_KEY"},
-			},
-			&cli.StringFlag{
-				Name:    "s3-cdn-url",
-				EnvVars: []string{"COCOON_S3_CDN_URL"},
-				Usage:   "Public URL for S3 blob redirects (e.g., https://cdn.example.com). When set, getBlob redirects to this URL instead of proxying.",
+				Name:    "ipfs-pinning-service-token",
+				EnvVars: []string{"COCOON_IPFS_PINNING_SERVICE_TOKEN"},
+				Usage:   "Bearer token for authenticating with the remote IPFS pinning service.",
 			},
 			&cli.StringFlag{
 				Name:    "session-secret",
@@ -216,8 +197,6 @@ var runServe = &cli.Command{
 			LogLevel:        level,
 			Addr:            cmd.String("addr"),
 			DbName:          cmd.String("db-name"),
-			DbType:          cmd.String("db-type"),
-			DatabaseURL:     cmd.String("database-url"),
 			Did:             cmd.String("did"),
 			Hostname:        cmd.String("hostname"),
 			RotationKeyPath: cmd.String("rotation-key-path"),
@@ -233,15 +212,12 @@ var runServe = &cli.Command{
 			SmtpPort:        cmd.String("smtp-port"),
 			SmtpEmail:       cmd.String("smtp-email"),
 			SmtpName:        cmd.String("smtp-name"),
-			S3Config: &server.S3Config{
-				BackupsEnabled:   cmd.Bool("s3-backups-enabled"),
-				BlobstoreEnabled: cmd.Bool("s3-blobstore-enabled"),
-				Region:           cmd.String("s3-region"),
-				Bucket:           cmd.String("s3-bucket"),
-				Endpoint:         cmd.String("s3-endpoint"),
-				AccessKey:        cmd.String("s3-access-key"),
-				SecretKey:        cmd.String("s3-secret-key"),
-				CDNUrl:           cmd.String("s3-cdn-url"),
+			IPFSConfig: &server.IPFSConfig{
+				BlobstoreEnabled:    cmd.Bool("ipfs-blobstore-enabled"),
+				NodeURL:             cmd.String("ipfs-node-url"),
+				GatewayURL:          cmd.String("ipfs-gateway-url"),
+				PinningServiceURL:   cmd.String("ipfs-pinning-service-url"),
+				PinningServiceToken: cmd.String("ipfs-pinning-service-token"),
 			},
 			SessionSecret:     cmd.String("session-secret"),
 			SessionCookieKey:  cmd.String("session-cookie-key"),
@@ -410,23 +386,9 @@ var runResetPassword = &cli.Command{
 }
 
 func newDb(cmd *cli.Context) (*gorm.DB, error) {
-	dbType := cmd.String("db-type")
-	if dbType == "" {
-		dbType = "sqlite"
+	dbName := cmd.String("db-name")
+	if dbName == "" {
+		dbName = "cocoon.db"
 	}
-
-	switch dbType {
-	case "postgres":
-		databaseURL := cmd.String("database-url")
-		if databaseURL == "" {
-			return nil, fmt.Errorf("COCOON_DATABASE_URL or DATABASE_URL must be set when using postgres")
-		}
-		return gorm.Open(postgres.Open(databaseURL), &gorm.Config{})
-	default:
-		dbName := cmd.String("db-name")
-		if dbName == "" {
-			dbName = "cocoon.db"
-		}
-		return gorm.Open(sqlite.Open(dbName), &gorm.Config{})
-	}
+	return gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 }

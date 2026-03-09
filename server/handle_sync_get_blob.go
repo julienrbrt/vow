@@ -4,12 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
@@ -56,76 +53,41 @@ func (s *Server) handleSyncGetBlob(e echo.Context) error {
 
 	buf := new(bytes.Buffer)
 
-	if blob.Storage == "sqlite" {
+	switch blob.Storage {
+	case "sqlite":
 		var parts []models.BlobPart
 		if err := s.db.Raw(ctx, "SELECT * FROM blob_parts WHERE blob_id = ? ORDER BY idx", nil, blob.ID).Scan(&parts).Error; err != nil {
 			logger.Error("error getting blob parts", "error", err)
 			return helpers.ServerError(e, nil)
 		}
 
-		// TODO: we can just stream this, don't need to make a buffer
 		for _, p := range parts {
 			buf.Write(p.Data)
 		}
-	} else if blob.Storage == "s3" {
-		if !(s.s3Config != nil && s.s3Config.BlobstoreEnabled) {
-			logger.Error("s3 storage disabled")
+
+	case "ipfs":
+		if s.ipfsConfig == nil || !s.ipfsConfig.BlobstoreEnabled {
+			logger.Error("ipfs storage disabled")
 			return helpers.ServerError(e, nil)
 		}
 
-		blobKey := fmt.Sprintf("blobs/%s/%s", urepo.Repo.Did, c.String())
-
-		if s.s3Config.CDNUrl != "" {
-			redirectUrl := fmt.Sprintf("%s/%s", s.s3Config.CDNUrl, blobKey)
-			return e.Redirect(302, redirectUrl)
+		// If a public gateway is configured, redirect the client directly to it
+		// instead of proxying the content through this server.
+		if s.ipfsConfig.GatewayURL != "" {
+			redirectURL := fmt.Sprintf("%s/ipfs/%s", s.ipfsConfig.GatewayURL, c.String())
+			return e.Redirect(302, redirectURL)
 		}
 
-		config := &aws.Config{
-			Region:      aws.String(s.s3Config.Region),
-			Credentials: credentials.NewStaticCredentials(s.s3Config.AccessKey, s.s3Config.SecretKey, ""),
-		}
-
-		if s.s3Config.Endpoint != "" {
-			config.Endpoint = aws.String(s.s3Config.Endpoint)
-			config.S3ForcePathStyle = aws.Bool(true)
-		}
-
-		sess, err := session.NewSession(config)
+		// Otherwise fetch from the local Kubo node via /api/v0/cat and stream
+		// the content back to the client.
+		data, err := s.fetchBlobFromIPFS(c.String())
 		if err != nil {
-			logger.Error("error creating aws session", "error", err)
+			logger.Error("error fetching blob from ipfs node", "cid", c.String(), "error", err)
 			return helpers.ServerError(e, nil)
 		}
+		buf.Write(data)
 
-		svc := s3.New(sess)
-		if result, err := svc.GetObject(&s3.GetObjectInput{
-			Bucket: aws.String(s.s3Config.Bucket),
-			Key:    aws.String(blobKey),
-		}); err != nil {
-			logger.Error("error getting blob from s3", "error", err)
-			return helpers.ServerError(e, nil)
-		} else {
-			read := 0
-			part := 0
-			partBuf := make([]byte, 0x10000)
-
-			for {
-				n, err := io.ReadFull(result.Body, partBuf)
-				if err == io.ErrUnexpectedEOF || err == io.EOF {
-					if n == 0 {
-						break
-					}
-				} else if err != nil && err != io.ErrUnexpectedEOF {
-					logger.Error("error reading blob", "error", err)
-					return helpers.ServerError(e, nil)
-				}
-
-				data := partBuf[:n]
-				read += n
-				buf.Write(data)
-				part++
-			}
-		}
-	} else {
+	default:
 		logger.Error("unknown storage", "storage", blob.Storage)
 		return helpers.ServerError(e, nil)
 	}
@@ -133,4 +95,38 @@ func (s *Server) handleSyncGetBlob(e echo.Context) error {
 	e.Response().Header().Set(echo.HeaderContentDisposition, "attachment; filename="+c.String())
 
 	return e.Stream(200, "application/octet-stream", buf)
+}
+
+// fetchBlobFromIPFS retrieves blob data for the given CID from the local Kubo
+// node using the HTTP RPC API (/api/v0/cat).
+func (s *Server) fetchBlobFromIPFS(cidStr string) ([]byte, error) {
+	nodeURL := s.ipfsConfig.NodeURL
+	if nodeURL == "" {
+		nodeURL = "http://127.0.0.1:5001"
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v0/cat?arg=%s", nodeURL, cidStr)
+
+	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error building ipfs cat request: %w", err)
+	}
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error calling ipfs cat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ipfs cat returned status %d: %s", resp.StatusCode, string(msg))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading ipfs cat response: %w", err)
+	}
+
+	return data, nil
 }

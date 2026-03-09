@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
+	"net/http"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
@@ -42,11 +40,12 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 		mime = "application/octet-stream"
 	}
 
+	ipfsUpload := s.ipfsConfig != nil && s.ipfsConfig.BlobstoreEnabled
 	storage := "sqlite"
-	s3Upload := s.s3Config != nil && s.s3Config.BlobstoreEnabled
-	if s3Upload {
-		storage = "s3"
+	if ipfsUpload {
+		storage = "ipfs"
 	}
+
 	blob := models.Blob{
 		Did:       urepo.Repo.Did,
 		RefCount:  0,
@@ -62,7 +61,7 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 	read := 0
 	part := 0
 
-	buf := make([]byte, 0x10000)
+	buf := make([]byte, blockSize)
 	fulldata := new(bytes.Buffer)
 
 	for {
@@ -80,7 +79,7 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 		read += n
 		fulldata.Write(data)
 
-		if !s3Upload {
+		if !ipfsUpload {
 			blobPart := models.BlobPart{
 				BlobID: blob.ID,
 				Idx:    part,
@@ -105,37 +104,27 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 		return helpers.ServerError(e, nil)
 	}
 
-	if s3Upload {
-		config := &aws.Config{
-			Region:      aws.String(s.s3Config.Region),
-			Credentials: credentials.NewStaticCredentials(s.s3Config.AccessKey, s.s3Config.SecretKey, ""),
-		}
-
-		if s.s3Config.Endpoint != "" {
-			config.Endpoint = aws.String(s.s3Config.Endpoint)
-			config.S3ForcePathStyle = aws.Bool(true)
-		}
-
-		sess, err := session.NewSession(config)
+	if ipfsUpload {
+		ipfsCid, err := s.addBlobToIPFS(fulldata.Bytes(), mime)
 		if err != nil {
-			logger.Error("error creating aws session", "error", err)
+			logger.Error("error adding blob to ipfs", "error", err)
 			return helpers.ServerError(e, nil)
 		}
 
-		svc := s3.New(sess)
+		// Overwrite the locally computed CID with the one returned by the IPFS
+		// node so that retrieval via the gateway uses the correct address.
+		c = ipfsCid
 
-		if _, err := svc.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String(s.s3Config.Bucket),
-			Key:    aws.String(fmt.Sprintf("blobs/%s/%s", urepo.Repo.Did, c.String())),
-			Body:   bytes.NewReader(fulldata.Bytes()),
-		}); err != nil {
-			logger.Error("error uploading blob to s3", "error", err)
-			return helpers.ServerError(e, nil)
+		if s.ipfsConfig.PinningServiceURL != "" {
+			if err := s.pinBlobToRemote(ctx, ipfsCid.String(), fmt.Sprintf("blob/%s/%s", urepo.Repo.Did, ipfsCid.String())); err != nil {
+				// Non-fatal: the blob is already on the local node; log and
+				// continue so the upload does not fail.
+				logger.Warn("error pinning blob to remote pinning service", "cid", ipfsCid.String(), "error", err)
+			}
 		}
 	}
 
 	if err := s.db.Exec(ctx, "UPDATE blobs SET cid = ? WHERE id = ?", nil, c.Bytes(), blob.ID).Error; err != nil {
-		// there should probably be somme handling here if this fails...
 		logger.Error("error updating blob", "error", err)
 		return helpers.ServerError(e, nil)
 	}
@@ -147,4 +136,65 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 	resp.Blob.Size = read
 
 	return e.JSON(200, resp)
+}
+
+// addBlobToIPFS adds raw blob data to the configured IPFS node via the Kubo
+// HTTP RPC API (/api/v0/add) and returns the resulting CID.
+func (s *Server) addBlobToIPFS(data []byte, mimeType string) (cid.Cid, error) {
+	nodeURL := s.ipfsConfig.NodeURL
+	if nodeURL == "" {
+		nodeURL = "http://127.0.0.1:5001"
+	}
+
+	endpoint := nodeURL + "/api/v0/add?cid-version=1&hash=sha2-256&pin=true&quieter=true"
+
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("file", "blob")
+	if err != nil {
+		return cid.Undef, fmt.Errorf("error creating multipart field: %w", err)
+	}
+
+	if _, err := part.Write(data); err != nil {
+		return cid.Undef, fmt.Errorf("error writing blob data to multipart: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return cid.Undef, fmt.Errorf("error closing multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, endpoint, body)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("error building ipfs add request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("error calling ipfs add: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return cid.Undef, fmt.Errorf("ipfs add returned status %d: %s", resp.StatusCode, string(msg))
+	}
+
+	// The Kubo API with ?quieter=true returns a single JSON line:
+	// {"Hash":"<cid>","Size":"<n>"}
+	var result struct {
+		Hash string `json:"Hash"`
+	}
+
+	if err := readJSON(resp.Body, &result); err != nil {
+		return cid.Undef, fmt.Errorf("error decoding ipfs add response: %w", err)
+	}
+
+	c, err := cid.Parse(result.Hash)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("error parsing cid from ipfs add response: %w", err)
+	}
+
+	return c, nil
 }
