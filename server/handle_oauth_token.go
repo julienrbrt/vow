@@ -234,7 +234,7 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			RefreshToken: refreshToken,
 			TokenType:    tokenType,
 			Scope:        authReq.Parameters.Scope,
-			ExpiresIn:    int64(eat.Sub(time.Now()).Seconds()),
+			ExpiresIn:    int64(time.Until(eat).Seconds()),
 			Sub:          repo.Repo.Did,
 		})
 		return
@@ -330,7 +330,7 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			RefreshToken: nextRefreshToken,
 			TokenType:    tokenType,
 			Scope:        oauthToken.Parameters.Scope,
-			ExpiresIn:    int64(eat.Sub(time.Now()).Seconds()),
+			ExpiresIn:    int64(time.Until(eat).Seconds()),
 			Sub:          oauthToken.Sub,
 		})
 		return

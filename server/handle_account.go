@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hako/durafmt"
 	"pkg.rbrt.fr/vow/oauth"
 	"pkg.rbrt.fr/vow/oauth/constants"
 	"pkg.rbrt.fr/vow/oauth/provider"
-	"github.com/hako/durafmt"
 )
 
 func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
@@ -16,7 +16,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 
 	repo, sess, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		http.Redirect(w, r, "/account/signin", 303)
+		http.Redirect(w, r, "/account/signin", http.StatusSeeOther)
 		return
 	}
 
@@ -26,20 +26,15 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_tokens WHERE sub = ? AND created_at < ? ORDER BY created_at ASC", nil, repo.Repo.Did, oldestPossibleSession).Scan(&tokens).Error; err != nil {
 		logger.Error("couldnt fetch oauth sessions for account", "did", repo.Repo.Did, "error", err)
 		sess.AddFlash("Unable to fetch sessions. See server logs for more details.", "error")
-		sess.Save(r, w)
-		s.renderTemplate(w, "account.html", map[string]any{
-			"flashes": getFlashesFromSession(w, r, sess),
-		})
-		return
-	}
-
-	var filtered []provider.OauthToken
-	for _, t := range tokens {
-		ageRes := oauth.GetSessionAgeFromToken(t)
-		if ageRes.SessionExpired {
-			continue
+		if err := sess.Save(r, w); err != nil {
+			logger.Error("failed to save session", "error", err)
 		}
-		filtered = append(filtered, t)
+		if err := s.renderTemplate(w, "account.html", map[string]any{
+			"flashes": s.getFlashesFromSession(w, r, sess),
+		}); err != nil {
+			logger.Error("failed to render template", "error", err)
+		}
+		return
 	}
 
 	now := time.Now()
@@ -70,9 +65,11 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	s.renderTemplate(w, "account.html", map[string]any{
+	if err := s.renderTemplate(w, "account.html", map[string]any{
 		"Repo":    repo,
 		"Tokens":  tokenInfo,
-		"flashes": getFlashesFromSession(w, r, sess),
-	})
+		"flashes": s.getFlashesFromSession(w, r, sess),
+	}); err != nil {
+		logger.Error("failed to render template", "error", err)
+	}
 }

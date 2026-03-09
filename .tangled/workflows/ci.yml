@@ -1,0 +1,24 @@
+when:
+  - event: ["push"]
+    branch: ["main"]
+  - event: ["pull_request"]
+    branch: ["main"]
+
+engine: "nixery"
+
+# using the default values
+clone:
+  skip: false
+  depth: 1
+
+dependencies:
+  nixpkgs:
+    - go
+    - gcc
+
+steps:
+  - name: "Build servmon"
+    command: "go build ."
+
+  - name: "Run tests"
+    command: "go test ./... -v"

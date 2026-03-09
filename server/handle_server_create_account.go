@@ -17,10 +17,10 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
-	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoServerCreateAccountRequest struct {
@@ -268,14 +268,16 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+		if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 			RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 				Did:    urepo.Did,
 				Handle: to.StringPtr(request.Handle),
 				Seq:    time.Now().UnixMicro(), // TODO: no
 				Time:   time.Now().Format(util.ISO8601),
 			},
-		})
+		}); err != nil {
+			logger.Error("failed to add event", "error", err)
+		}
 	}
 
 	if s.config.RequireInvite {

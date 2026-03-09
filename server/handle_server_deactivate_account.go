@@ -30,7 +30,7 @@ func (s *Server) handleServerDeactivateAccount(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 		RepoAccount: &atproto.SyncSubscribeRepos_Account{
 			Active: false,
 			Did:    urepo.Repo.Did,
@@ -38,7 +38,9 @@ func (s *Server) handleServerDeactivateAccount(w http.ResponseWriter, r *http.Re
 			Seq:    time.Now().UnixMicro(), // TODO: bad puppy
 			Time:   time.Now().Format(util.ISO8601),
 		},
-	})
+	}); err != nil {
+		s.logger.Error("failed to add event", "error", err)
+	}
 
 	w.WriteHeader(http.StatusOK)
 }

@@ -64,7 +64,13 @@ test: ## Run tests
 .PHONY: lint
 lint: ## Verify code style and run static checks
 	go vet ./...
-	test -z $(gofmt -l ./...)
+	go fix ./...
+	test -z "$(shell gofmt -l ./...)"
+	golangci-lint run ./... --fix
+
+.PHONY: lint-install
+lint-install: ## Install golangci-lint
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 .PHONY: fmt
 fmt: ## Run syntax re-formatting (modify in place)

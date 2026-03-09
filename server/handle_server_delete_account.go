@@ -10,8 +10,8 @@ import (
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
-	"pkg.rbrt.fr/vow/internal/helpers"
 	"golang.org/x/crypto/bcrypt"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 type ComAtprotoServerDeleteAccountRequest struct {
@@ -44,13 +44,13 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(urepo.Repo.Password), []byte(req.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(urepo.Password), []byte(req.Password)); err != nil {
 		logger.Error("password mismatch", "error", err)
 		s.writeJSON(w, 401, map[string]string{"error": "Invalid did or password"})
 		return
 	}
 
-	if urepo.Repo.AccountDeleteCode == nil || urepo.Repo.AccountDeleteCodeExpiresAt == nil {
+	if urepo.AccountDeleteCode == nil || urepo.AccountDeleteCodeExpiresAt == nil {
 		logger.Error("no deletion token found for account")
 		s.writeJSON(w, 400, map[string]any{
 			"error":   "InvalidToken",
@@ -59,7 +59,7 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if *urepo.Repo.AccountDeleteCode != req.Token {
+	if *urepo.AccountDeleteCode != req.Token {
 		logger.Error("deletion token mismatch")
 		s.writeJSON(w, 400, map[string]any{
 			"error":   "InvalidToken",
@@ -68,7 +68,7 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if time.Now().UTC().After(*urepo.Repo.AccountDeleteCodeExpiresAt) {
+	if time.Now().UTC().After(*urepo.AccountDeleteCodeExpiresAt) {
 		logger.Error("deletion token expired")
 		s.writeJSON(w, 400, map[string]any{
 			"error":   "ExpiredToken",
@@ -155,7 +155,7 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 		RepoAccount: &atproto.SyncSubscribeRepos_Account{
 			Active: false,
 			Did:    req.Did,
@@ -163,7 +163,9 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 			Seq:    time.Now().UnixMicro(),
 			Time:   time.Now().Format(util.ISO8601),
 		},
-	})
+	}); err != nil {
+		s.logger.Error("failed to add event", "error", err)
+	}
 
 	w.WriteHeader(http.StatusOK)
 }

@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/to"
-	"pkg.rbrt.fr/vow/internal/helpers"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 var (
@@ -81,7 +81,7 @@ func (s *Server) handleAtprotoDid(w http.ResponseWriter, r *http.Request) {
 
 	if host == s.config.Hostname {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, s.config.Did)
+		_, _ = fmt.Fprint(w, s.config.Did)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (s *Server) handleAtprotoDid(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, actor.Did)
+	_, _ = fmt.Fprint(w, actor.Did)
 }
 
 func (s *Server) handleOauthProtectedResource(w http.ResponseWriter, r *http.Request) {

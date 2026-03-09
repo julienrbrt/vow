@@ -1,8 +1,8 @@
 package server
 
 import (
+	blockstore "github.com/ipfs/go-ipfs-blockstore" //nolint:staticcheck
 	"pkg.rbrt.fr/vow/sqlite_blockstore"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
 )
 
 type BlockstoreVariant int
@@ -20,7 +20,7 @@ func MustReturnBlockstoreVariant(maybeBsv string) BlockstoreVariant {
 	}
 }
 
-func (s *Server) getBlockstore(did string) blockstore.Blockstore {
+func (s *Server) getBlockstore(did string) blockstore.Blockstore { //nolint:staticcheck
 	switch s.config.BlockstoreVariant {
 	case BlockstoreVariantSqlite:
 		return sqlite_blockstore.New(did, s.db)

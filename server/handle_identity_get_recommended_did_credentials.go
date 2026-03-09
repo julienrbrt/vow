@@ -18,7 +18,7 @@ func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *ht
 		helpers.ServerError(w, nil)
 		return
 	}
-	creds, err := s.plcClient.CreateDidCredentials(k, "", repo.Actor.Handle)
+	creds, err := s.plcClient.CreateDidCredentials(k, "", repo.Handle)
 	if err != nil {
 		logger.Error("error creating did credentials", "error", err)
 		helpers.ServerError(w, nil)

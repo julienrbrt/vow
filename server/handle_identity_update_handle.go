@@ -41,7 +41,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), "skip-cache", true)
+	ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)
 
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
@@ -94,14 +94,16 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 		logger.Warn("error busting did doc", "error", err)
 	}
 
-	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 		RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 			Did:    repo.Repo.Did,
 			Handle: to.StringPtr(req.Handle),
 			Seq:    time.Now().UnixMicro(), // TODO: no
 			Time:   time.Now().Format(util.ISO8601),
 		},
-	})
+	}); err != nil {
+		s.logger.Error("failed to add event", "error", err)
+	}
 
 	if err := s.db.Exec(ctx, "UPDATE actors SET handle = ? WHERE did = ?", nil, req.Handle, repo.Repo.Did).Error; err != nil {
 		logger.Error("error updating handle in db", "error", err)

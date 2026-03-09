@@ -6,17 +6,17 @@ import (
 
 	blockformat "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	blockstore "github.com/ipfs/go-ipfs-blockstore" //nolint:staticcheck
 )
 
 type RecordingBlockstore struct {
-	base blockstore.Blockstore
+	base blockstore.Blockstore //nolint:staticcheck
 
 	inserts map[cid.Cid]blockformat.Block
 	reads   map[cid.Cid]blockformat.Block
 }
 
-func New(base blockstore.Blockstore) *RecordingBlockstore {
+func New(base blockstore.Blockstore) *RecordingBlockstore { //nolint:staticcheck
 	return &RecordingBlockstore{
 		base:    base,
 		inserts: make(map[cid.Cid]blockformat.Block),

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	cache "github.com/go-pkgz/expirable-cache/v3"
-	"pkg.rbrt.fr/vow/internal/helpers"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 type Manager struct {
@@ -102,10 +102,10 @@ func (cm *Manager) getClientMetadata(ctx context.Context, clientId string) (*Met
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
-			io.Copy(io.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			return nil, fmt.Errorf("fetching client metadata returned response code %d", resp.StatusCode)
 		}
 
@@ -139,10 +139,10 @@ func (cm *Manager) getClientJwks(ctx context.Context, clientId, jwksUri string) 
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
-			io.Copy(io.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			return nil, fmt.Errorf("fetching client jwks returned response code %d", resp.StatusCode)
 		}
 
@@ -358,10 +358,6 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 		case u.Hostname() == "127.0.0.1", u.Hostname() == "[::1]":
 			if metadata.ApplicationType != "native" {
 				return nil, errors.New("loopback redirect uris are only allowed for native apps")
-			}
-
-			if u.Port() != "" {
-				// reference impl doesn't do anything with this?
 			}
 
 			if u.Scheme != "http" {

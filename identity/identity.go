@@ -48,7 +48,7 @@ func ResolveHandleFromWellKnown(ctx context.Context, cli *http.Client, handle st
 	if err != nil {
 		return "", fmt.Errorf("handle could not be resolved via web: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -118,10 +118,10 @@ func FetchDidDoc(ctx context.Context, cli *http.Client, did string) (*DidDoc, er
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("unable to find did doc at url. did: %s. url: %s", did, ustr)
 	}
 
@@ -138,8 +138,7 @@ func FetchDidData(ctx context.Context, cli *http.Client, did string) (*DidData, 
 		cli = util.RobustHTTPClient()
 	}
 
-	var ustr string
-	ustr = fmt.Sprintf("https://plc.directory/%s/data", did)
+	var ustr = fmt.Sprintf("https://plc.directory/%s/data", did)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", ustr, nil)
 	if err != nil {
@@ -150,10 +149,10 @@ func FetchDidData(ctx context.Context, cli *http.Client, did string) (*DidData, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("could not find identity in plc registry")
 	}
 
@@ -170,22 +169,21 @@ func FetchDidAuditLog(ctx context.Context, cli *http.Client, did string) (DidAud
 		cli = util.RobustHTTPClient()
 	}
 
-	var ustr string
-	ustr = fmt.Sprintf("https://plc.directory/%s/log/audit", did)
+	var ustr = fmt.Sprintf("https://plc.directory/%s/log/audit", did)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", ustr, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("could not find identity in plc registry")
 	}
 

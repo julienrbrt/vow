@@ -20,7 +20,9 @@ import (
 )
 
 func main() {
-	runFirehoseConsumer("ws://localhost:8080")
+	if err := runFirehoseConsumer("ws://localhost:8080"); err != nil {
+		panic(err)
+	}
 }
 
 func runFirehoseConsumer(relayHost string) error {

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
-	"github.com/bluesky-social/indigo/atproto/identity"
 	atproto_identity "github.com/bluesky-social/indigo/atproto/identity"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/golang-jwt/jwt/v4"
@@ -21,7 +20,7 @@ func (m *ES256KSigningMethod) Alg() string {
 }
 
 func (m *ES256KSigningMethod) Verify(signingString string, signature string, key any) error {
-	signatureBytes, err := jwt.DecodeSegment(signature)
+	signatureBytes, err := jwt.DecodeSegment(signature) //nolint:staticcheck
 	if err != nil {
 		return err
 	}
@@ -66,7 +65,7 @@ func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid 
 				ServiceEndpoint: service.ServiceEndpoint,
 			}
 		}
-		parsedIdentity := atproto_identity.ParseIdentity(&identity.DIDDocument{
+		parsedIdentity := atproto_identity.ParseIdentity(&atproto_identity.DIDDocument{
 			DID:                did,
 			AlsoKnownAs:        didDoc.AlsoKnownAs,
 			VerificationMethod: verificationMethods,

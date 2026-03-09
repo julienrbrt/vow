@@ -6,6 +6,11 @@ import (
 	"sync"
 )
 
+type contextKey string
+
+// SkipCacheKey is the context key used to bypass the passport cache.
+const SkipCacheKey contextKey = "skip-cache"
+
 type BackingCache interface {
 	GetDoc(did string) (*DidDoc, bool)
 	PutDoc(did string, doc *DidDoc) error
@@ -34,7 +39,7 @@ func NewPassport(h *http.Client, bc BackingCache) *Passport {
 }
 
 func (p *Passport) FetchDoc(ctx context.Context, did string) (*DidDoc, error) {
-	skipCache, _ := ctx.Value("skip-cache").(bool)
+	skipCache, _ := ctx.Value(SkipCacheKey).(bool)
 
 	if !skipCache {
 		p.mu.RLock()
@@ -52,14 +57,14 @@ func (p *Passport) FetchDoc(ctx context.Context, did string) (*DidDoc, error) {
 	}
 
 	p.mu.Lock()
-	p.bc.PutDoc(did, doc)
+	_ = p.bc.PutDoc(did, doc)
 	p.mu.Unlock()
 
 	return doc, nil
 }
 
 func (p *Passport) ResolveHandle(ctx context.Context, handle string) (string, error) {
-	skipCache, _ := ctx.Value("skip-cache").(bool)
+	skipCache, _ := ctx.Value(SkipCacheKey).(bool)
 
 	if !skipCache {
 		p.mu.RLock()
@@ -77,7 +82,7 @@ func (p *Passport) ResolveHandle(ctx context.Context, handle string) (string, er
 	}
 
 	p.mu.Lock()
-	p.bc.PutDid(handle, did)
+	_ = p.bc.PutDid(handle, did)
 	p.mu.Unlock()
 
 	return did, nil

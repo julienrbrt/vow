@@ -28,6 +28,8 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-playground/validator"
 	"github.com/gorilla/sessions"
+	"github.com/ipfs/go-cid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/db"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -37,8 +39,6 @@ import (
 	"pkg.rbrt.fr/vow/oauth/dpop"
 	"pkg.rbrt.fr/vow/oauth/provider"
 	"pkg.rbrt.fr/vow/plc"
-	"github.com/ipfs/go-cid"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"gorm.io/gorm"
 )
@@ -76,21 +76,21 @@ type IPFSConfig struct {
 }
 
 type Server struct {
-	http             *http.Client
-	httpd            *http.Server
-	mail             *mailyak.MailYak
-	mailLk           *sync.Mutex
-	router           *chi.Mux
-	db               *db.DB
-	plcClient        *plc.Client
-	logger           *slog.Logger
-	config           *config
-	privateKey       *ecdsa.PrivateKey
-	repoman          *RepoMan
-	oauthProvider    *provider.Provider
-	evtman           *events.EventManager
-	passport         *identity.Passport
-	fallbackProxy    string
+	http          *http.Client
+	httpd         *http.Server
+	mail          *mailyak.MailYak
+	mailLk        *sync.Mutex
+	router        *chi.Mux
+	db            *db.DB
+	plcClient     *plc.Client
+	logger        *slog.Logger
+	config        *config
+	privateKey    *ecdsa.PrivateKey
+	repoman       *RepoMan
+	oauthProvider *provider.Provider
+	evtman        *events.EventManager
+	passport      *identity.Passport
+
 	sessions         *sessions.CookieStore
 	validator        *validator.Validate
 	templateRenderer *TemplateRenderer
@@ -287,30 +287,38 @@ func New(args *Args) (*Server, error) {
 	r.Use(corsMiddleware)
 
 	vdtor := validator.New()
-	vdtor.RegisterValidation("atproto-handle", func(fl validator.FieldLevel) bool {
+	if err := vdtor.RegisterValidation("atproto-handle", func(fl validator.FieldLevel) bool {
 		if _, err := syntax.ParseHandle(fl.Field().String()); err != nil {
 			return false
 		}
 		return true
-	})
-	vdtor.RegisterValidation("atproto-did", func(fl validator.FieldLevel) bool {
+	}); err != nil {
+		return nil, fmt.Errorf("failed to register atproto-handle validator: %w", err)
+	}
+	if err := vdtor.RegisterValidation("atproto-did", func(fl validator.FieldLevel) bool {
 		if _, err := syntax.ParseDID(fl.Field().String()); err != nil {
 			return false
 		}
 		return true
-	})
-	vdtor.RegisterValidation("atproto-rkey", func(fl validator.FieldLevel) bool {
+	}); err != nil {
+		return nil, fmt.Errorf("failed to register atproto-did validator: %w", err)
+	}
+	if err := vdtor.RegisterValidation("atproto-rkey", func(fl validator.FieldLevel) bool {
 		if _, err := syntax.ParseRecordKey(fl.Field().String()); err != nil {
 			return false
 		}
 		return true
-	})
-	vdtor.RegisterValidation("atproto-nsid", func(fl validator.FieldLevel) bool {
+	}); err != nil {
+		return nil, fmt.Errorf("failed to register atproto-rkey validator: %w", err)
+	}
+	if err := vdtor.RegisterValidation("atproto-nsid", func(fl validator.FieldLevel) bool {
 		if _, err := syntax.ParseNSID(fl.Field().String()); err != nil {
 			return false
 		}
 		return true
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("failed to register atproto-nsid validator: %w", err)
+	}
 
 	httpd := &http.Server{
 		Addr:    args.Addr,
@@ -587,7 +595,7 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	logger.Info("migrating...")
 
-	s.db.AutoMigrate(
+	if err := s.db.AutoMigrate(
 		&models.Actor{},
 		&models.Repo{},
 		&models.InviteCode{},
@@ -600,7 +608,9 @@ func (s *Server) Serve(ctx context.Context) error {
 		&models.ReservedKey{},
 		&provider.OauthToken{},
 		&provider.OauthAuthorizationRequest{},
-	)
+	); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
 
 	logger.Info("starting vow")
 

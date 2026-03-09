@@ -90,5 +90,7 @@ func (s *Server) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/vnd.ipld.car")
 	w.WriteHeader(http.StatusOK)
-	w.Write(buf.Bytes())
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		logger.Error("failed to write response", "error", err)
+	}
 }

@@ -22,10 +22,8 @@ import (
 	"github.com/bluesky-social/indigo/repo"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
-	"github.com/multiformats/go-multihash"
 	"gorm.io/gorm/clause"
 	"pkg.rbrt.fr/vow/internal/db"
 	"pkg.rbrt.fr/vow/metrics"
@@ -128,9 +126,8 @@ func (mm *MarshalableMap) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	w.Write(data)
-
-	return nil
+	_, err = w.Write(data)
+	return err
 }
 
 type ApplyWriteResult struct {
@@ -243,6 +240,13 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 
 	dbs := rm.s.getBlockstore(urepo.Did)
 	bs := recording_blockstore.New(dbs)
+<<<<<<< HEAD
+=======
+	r, err := repo.OpenRepo(ctx, bs, rootcid)
+	if err != nil {
+		return nil, fmt.Errorf("error opening repo: %w", err)
+	}
+>>>>>>> 4a24227 (refactor: fix lint + configure tangled ci)
 
 	var results []ApplyWriteResult
 	var ops []*atp.Operation
@@ -424,6 +428,9 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		Roots:   []cid.Cid{newroot},
 		Version: 1,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("error dumping car header: %w", err)
+	}
 	if _, err := carstore.LdWrite(buf, hb); err != nil {
 		return nil, err
 	}
@@ -518,7 +525,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 
 	// NOTE: using the request ctx seems a bit suss here, so using a background context. i'm not sure if this
 	// runs sync or not
-	rm.s.evtman.AddEvent(context.Background(), &events.XRPCStreamEvent{
+	if err := rm.s.evtman.AddEvent(context.Background(), &events.XRPCStreamEvent{
 		RepoCommit: &atproto.SyncSubscribeRepos_Commit{
 			Repo:   urepo.Did,
 			Blocks: buf.Bytes(),
@@ -530,7 +537,9 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 			Ops:    repoOps,
 			TooBig: false,
 		},
-	})
+	}); err != nil {
+		rm.s.logger.Error("failed to add event", "error", err)
+	}
 
 	if err := rm.s.UpdateRepo(ctx, urepo.Did, newroot, rev); err != nil {
 		return nil, err
@@ -718,7 +727,9 @@ func getBlobCidsFromCbor(cbor []byte) ([]cid.Cid, error) {
 			}
 		case []any:
 			for _, v := range val {
-				deepiter(v)
+				if err := deepiter(v); err != nil {
+					return err
+				}
 			}
 		}
 

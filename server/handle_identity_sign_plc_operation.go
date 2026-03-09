@@ -59,7 +59,7 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), "skip-cache", true)
+	ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)
 	log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 	if err != nil {
 		logger.Error("error fetching doc", "error", err)

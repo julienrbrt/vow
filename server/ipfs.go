@@ -60,7 +60,7 @@ func (s *Server) pinBlobToRemote(ctx context.Context, cidStr string, name string
 	if err != nil {
 		return fmt.Errorf("error calling pinning service: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// The Pinning Service API returns 202 Accepted on success.
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {

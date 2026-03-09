@@ -9,10 +9,10 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/gorilla/sessions"
-	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type OauthSigninInput struct {
@@ -43,8 +43,12 @@ func (s *Server) getSessionRepoOrErr(r *http.Request) (*models.RepoActor, *sessi
 	return repo, sess, nil
 }
 
-func getFlashesFromSession(w http.ResponseWriter, r *http.Request, sess *sessions.Session) map[string]any {
-	defer sess.Save(r, w)
+func (s *Server) getFlashesFromSession(w http.ResponseWriter, r *http.Request, sess *sessions.Session) map[string]any {
+	defer func() {
+		if err := sess.Save(r, w); err != nil {
+			s.logger.Error("failed to save session", "error", err)
+		}
+	}()
 	return map[string]any{
 		"errors":        sess.Flashes("error"),
 		"successes":     sess.Flashes("success"),
@@ -55,14 +59,16 @@ func getFlashesFromSession(w http.ResponseWriter, r *http.Request, sess *session
 func (s *Server) handleAccountSigninGet(w http.ResponseWriter, r *http.Request) {
 	_, sess, err := s.getSessionRepoOrErr(r)
 	if err == nil {
-		http.Redirect(w, r, "/account", 303)
+		http.Redirect(w, r, "/account", http.StatusSeeOther)
 		return
 	}
 
-	s.renderTemplate(w, "signin.html", map[string]any{
-		"flashes":     getFlashesFromSession(w, r, sess),
+	if err := s.renderTemplate(w, "signin.html", map[string]any{
+		"flashes":     s.getFlashesFromSession(w, r, sess),
 		"QueryParams": r.URL.Query().Encode(),
-	})
+	}); err != nil {
+		s.logger.Error("failed to render template", "error", err)
+	}
 }
 
 func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request) {
@@ -116,8 +122,10 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		} else {
 			sess.AddFlash("Something went wrong!", "error")
 		}
-		sess.Save(r, w)
-		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		if err := sess.Save(r, w); err != nil {
+			logger.Error("failed to save session", "error", err)
+		}
+		http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 		return
 	}
 
@@ -127,8 +135,10 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		} else {
 			sess.AddFlash("Something went wrong!", "error")
 		}
-		sess.Save(r, w)
-		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		if err := sess.Save(r, w); err != nil {
+			logger.Error("failed to save session", "error", err)
+		}
+		http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 		return
 	}
 
@@ -137,14 +147,18 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		err = s.createAndSendTwoFactorCode(ctx, repo)
 		if err != nil {
 			sess.AddFlash("Something went wrong!", "error")
-			sess.Save(r, w)
-			http.Redirect(w, r, "/account/signin"+queryParams, 303)
+			if err := sess.Save(r, w); err != nil {
+				logger.Error("failed to save session", "error", err)
+			}
+			http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 			return
 		}
 
 		sess.AddFlash("requires 2FA token", "tokenrequired")
-		sess.Save(r, w)
-		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		if err := sess.Save(r, w); err != nil {
+			logger.Error("failed to save session", "error", err)
+		}
+		http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 		return
 	}
 
@@ -154,14 +168,18 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 			err = s.createAndSendTwoFactorCode(ctx, repo)
 			if err != nil {
 				sess.AddFlash("Something went wrong!", "error")
-				sess.Save(r, w)
-				http.Redirect(w, r, "/account/signin"+queryParams, 303)
+				if err := sess.Save(r, w); err != nil {
+					logger.Error("failed to save session", "error", err)
+				}
+				http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 				return
 			}
 
 			sess.AddFlash("requires 2FA token", "tokenrequired")
-			sess.Save(r, w)
-			http.Redirect(w, r, "/account/signin"+queryParams, 303)
+			if err := sess.Save(r, w); err != nil {
+				logger.Error("failed to save session", "error", err)
+			}
+			http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 			return
 		}
 
@@ -191,8 +209,8 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 	}
 
 	if queryParams != "" {
-		http.Redirect(w, r, "/oauth/authorize"+queryParams, 303)
+		http.Redirect(w, r, "/oauth/authorize"+queryParams, http.StatusSeeOther)
 	} else {
-		http.Redirect(w, r, "/account", 303)
+		http.Redirect(w, r, "/account", http.StatusSeeOther)
 	}
 }

@@ -7,7 +7,7 @@ import (
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, `
+	_, _ = fmt.Fprint(w, `
 
                                  ....-*%%%#####
                      .%#+++****#%%%%%%%%%#+:....

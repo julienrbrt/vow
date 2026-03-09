@@ -105,7 +105,9 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename="+c.String())
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, buf)
+	if _, err := io.Copy(w, buf); err != nil {
+		logger.Error("failed to write blob response", "error", err)
+	}
 }
 
 // fetchBlobFromIPFS retrieves blob data for the given CID from the local Kubo
@@ -127,7 +129,7 @@ func (s *Server) fetchBlobFromIPFS(cidStr string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error calling ipfs cat: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

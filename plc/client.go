@@ -97,9 +97,7 @@ func (c *Client) CreateDidCredentials(sigkey *atcrypto.PrivateKeyK256, recovery 
 	if recovery != "" {
 		rotationKeys = func(recovery string) []string {
 			newRotationKeys := []string{recovery}
-			for _, k := range rotationKeys {
-				newRotationKeys = append(newRotationKeys, k)
-			}
+			newRotationKeys = append(newRotationKeys, rotationKeys...)
 			return newRotationKeys
 		}(recovery)
 	}
@@ -156,7 +154,7 @@ func (c *Client) SendOperation(ctx context.Context, did string, op *Operation) e
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	b, err = io.ReadAll(resp.Body)
 	if err != nil {

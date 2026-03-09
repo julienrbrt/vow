@@ -168,11 +168,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		helpers.ServerError(w, nil)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	for k, v := range resp.Header {
 		w.Header().Set(k, strings.Join(v, ","))
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		logger.Error("failed to copy response body", "error", err)
+	}
 }

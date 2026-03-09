@@ -61,12 +61,14 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 		if err := s.validator.Struct(parRequest); err != nil {
 			// render page for logged out dev
 			if s.config.Version == "dev" && parRequest.ClientID == "" {
-				s.renderTemplate(w, "authorize.html", map[string]any{
+				if err := s.renderTemplate(w, "authorize.html", map[string]any{
 					"Scopes":     []string{"atproto", "transition:generic"},
 					"AppName":    "DEV MODE AUTHORIZATION PAGE",
 					"Handle":     "paula.rbrt.fr",
 					"RequestUri": "",
-				})
+				}); err != nil {
+					logger.Error("failed to render template", "error", err)
+				}
 				return
 			}
 			helpers.InputError(w, to.StringPtr("no request uri and invalid parameters"))
@@ -82,11 +84,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		if parRequest.DpopJkt == nil {
-			if client.Metadata.DpopBoundAccessTokens {
-				// nothing to do
-			}
-		} else {
+		if parRequest.DpopJkt != nil {
 			if !client.Metadata.DpopBoundAccessTokens {
 				msg := "dpop bound access tokens are not enabled for this client"
 				helpers.InputError(w, &msg)
@@ -117,7 +115,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 
 	repo, _, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		http.Redirect(w, r, "/account/signin?"+r.URL.Query().Encode(), 303)
+		http.Redirect(w, r, "/account/signin?"+r.URL.Query().Encode(), http.StatusSeeOther)
 		return
 	}
 
@@ -147,10 +145,12 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 		"AppName":     appName,
 		"RequestUri":  requestUri,
 		"QueryParams": r.URL.Query().Encode(),
-		"Handle":      repo.Actor.Handle,
+		"Handle":      repo.Handle,
 	}
 
-	s.renderTemplate(w, "authorize.html", data)
+	if err := s.renderTemplate(w, "authorize.html", data); err != nil {
+		logger.Error("failed to render template", "error", err)
+	}
 }
 
 type OauthAuthorizePostRequest struct {
@@ -164,7 +164,7 @@ func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request
 
 	repo, _, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		http.Redirect(w, r, "/account/signin", 303)
+		http.Redirect(w, r, "/account/signin", http.StatusSeeOther)
 		return
 	}
 
@@ -199,7 +199,7 @@ func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request
 
 	// TODO: figure out how im supposed to actually redirect
 	if req.AcceptOrRejct == "reject" {
-		http.Redirect(w, r, client.Metadata.ClientURI, 303)
+		http.Redirect(w, r, client.Metadata.ClientURI, http.StatusSeeOther)
 		return
 	}
 
@@ -251,5 +251,5 @@ func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request
 	}
 
 	_ = fmt.Sprintf // avoid unused import if fmt ends up unused
-	http.Redirect(w, r, authReq.Parameters.RedirectURI+hashOrQuestion+q.Encode(), 303)
+	http.Redirect(w, r, authReq.Parameters.RedirectURI+hashOrQuestion+q.Encode(), http.StatusSeeOther)
 }

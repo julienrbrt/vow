@@ -179,7 +179,7 @@ func (s *Server) addBlobToIPFS(data []byte, mimeType string) (cid.Cid, error) {
 	if err != nil {
 		return cid.Undef, fmt.Errorf("error calling ipfs add: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

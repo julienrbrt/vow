@@ -16,59 +16,59 @@ import (
 // /^[A-Z2-7]{5}-[A-Z2-7]{5}$/
 var letters = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
-func writeJSON(w http.ResponseWriter, status int, v any) error {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	return json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
-func InputError(w http.ResponseWriter, custom *string) error {
+func InputError(w http.ResponseWriter, custom *string) {
 	msg := "InvalidRequest"
 	if custom != nil {
 		msg = *custom
 	}
-	return genericError(w, http.StatusBadRequest, msg)
+	genericError(w, http.StatusBadRequest, msg)
 }
 
-func ServerError(w http.ResponseWriter, suffix *string) error {
+func ServerError(w http.ResponseWriter, suffix *string) {
 	msg := "Internal server error"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(w, http.StatusInternalServerError, msg)
+	genericError(w, http.StatusInternalServerError, msg)
 }
 
-func UnauthorizedError(w http.ResponseWriter, suffix *string) error {
+func UnauthorizedError(w http.ResponseWriter, suffix *string) {
 	msg := "Unauthorized"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(w, http.StatusUnauthorized, msg)
+	genericError(w, http.StatusUnauthorized, msg)
 }
 
-func ForbiddenError(w http.ResponseWriter, suffix *string) error {
+func ForbiddenError(w http.ResponseWriter, suffix *string) {
 	msg := "Forbidden"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(w, http.StatusForbidden, msg)
+	genericError(w, http.StatusForbidden, msg)
 }
 
-func InvalidTokenError(w http.ResponseWriter) error {
+func InvalidTokenError(w http.ResponseWriter) {
 	s := "InvalidToken"
-	return InputError(w, &s)
+	InputError(w, &s)
 }
 
-func ExpiredTokenError(w http.ResponseWriter) error {
+func ExpiredTokenError(w http.ResponseWriter) {
 	// WARN: See https://github.com/bluesky-social/atproto/discussions/3319
-	return writeJSON(w, http.StatusBadRequest, map[string]string{
+	writeJSON(w, http.StatusBadRequest, map[string]string{
 		"error":   "ExpiredToken",
 		"message": "*",
 	})
 }
 
-func genericError(w http.ResponseWriter, code int, msg string) error {
-	return writeJSON(w, code, map[string]string{
+func genericError(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{
 		"error": msg,
 	})
 }
@@ -91,7 +91,7 @@ func RandomHex(n int) (string, error) {
 
 func RandomBytes(n int) []byte {
 	bs := make([]byte, n)
-	crand.Read(bs)
+	_, _ = crand.Read(bs)
 	return bs
 }
 

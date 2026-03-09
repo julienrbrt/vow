@@ -25,7 +25,7 @@ func (s *Server) handleServerRequestAccountDelete(w http.ResponseWriter, r *http
 	}
 
 	if urepo.Email != "" {
-		if err := s.sendAccountDeleteEmail(urepo.Email, urepo.Actor.Handle, token); err != nil {
+		if err := s.sendAccountDeleteEmail(urepo.Email, urepo.Handle, token); err != nil {
 			logger.Error("error sending account deletion email", "error", err)
 		}
 	}

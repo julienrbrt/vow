@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"pkg.rbrt.fr/vow/identity"
 	"net/http"
 
 	"github.com/Azure/go-autorest/autorest/to"
@@ -29,7 +30,7 @@ func (s *Server) handleResolveHandle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), "skip-cache", true)
+	ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)
 	did, err := s.passport.ResolveHandle(ctx, parsed.String())
 	if err != nil {
 		logger.Error("error resolving handle", "error", err)

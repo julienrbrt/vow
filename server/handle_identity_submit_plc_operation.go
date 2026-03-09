@@ -51,7 +51,7 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 		helpers.ServerError(w, nil)
 		return
 	}
-	required, err := s.plcClient.CreateDidCredentials(k, "", repo.Actor.Handle)
+	required, err := s.plcClient.CreateDidCredentials(k, "", repo.Handle)
 	if err != nil {
 		logger.Error("error creating did credentials", "error", err)
 		helpers.ServerError(w, nil)
@@ -90,11 +90,13 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 		logger.Warn("error busting did doc", "error", err)
 	}
 
-	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
+	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 		RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 			Did:  repo.Repo.Did,
 			Seq:  time.Now().UnixMicro(), // TODO: no
 			Time: time.Now().Format(util.ISO8601),
 		},
-	})
+	}); err != nil {
+		s.logger.Error("failed to add event", "error", err)
+	}
 }

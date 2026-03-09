@@ -33,5 +33,5 @@ func (s *Server) handleAccountSignout(w http.ResponseWriter, r *http.Request) {
 		redirect += "?" + r.URL.Query().Encode()
 	}
 
-	http.Redirect(w, r, redirect, 303)
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
