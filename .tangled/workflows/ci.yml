@@ -17,7 +17,7 @@ dependencies:
     - gcc
 
 steps:
-  - name: "Build servmon"
+  - name: "Build"
     command: "go build ."
 
   - name: "Run tests"
