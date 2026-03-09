@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -10,8 +11,6 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -23,10 +22,10 @@ type OauthSigninInput struct {
 	QueryParams     string `form:"query_params"`
 }
 
-func (s *Server) getSessionRepoOrErr(e echo.Context) (*models.RepoActor, *sessions.Session, error) {
-	ctx := e.Request().Context()
+func (s *Server) getSessionRepoOrErr(r *http.Request) (*models.RepoActor, *sessions.Session, error) {
+	ctx := r.Context()
 
-	sess, err := session.Get(s.config.SessionCookieKey, e)
+	sess, err := s.sessions.Get(r, s.config.SessionCookieKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -44,8 +43,8 @@ func (s *Server) getSessionRepoOrErr(e echo.Context) (*models.RepoActor, *sessio
 	return repo, sess, nil
 }
 
-func getFlashesFromSession(e echo.Context, sess *sessions.Session) map[string]any {
-	defer sess.Save(e.Request(), e.Response())
+func getFlashesFromSession(w http.ResponseWriter, r *http.Request, sess *sessions.Session) map[string]any {
+	defer sess.Save(r, w)
 	return map[string]any{
 		"errors":        sess.Flashes("error"),
 		"successes":     sess.Flashes("success"),
@@ -53,29 +52,37 @@ func getFlashesFromSession(e echo.Context, sess *sessions.Session) map[string]an
 	}
 }
 
-func (s *Server) handleAccountSigninGet(e echo.Context) error {
-	_, sess, err := s.getSessionRepoOrErr(e)
+func (s *Server) handleAccountSigninGet(w http.ResponseWriter, r *http.Request) {
+	_, sess, err := s.getSessionRepoOrErr(r)
 	if err == nil {
-		return e.Redirect(303, "/account")
+		http.Redirect(w, r, "/account", 303)
+		return
 	}
 
-	return e.Render(200, "signin.html", map[string]any{
-		"flashes":     getFlashesFromSession(e, sess),
-		"QueryParams": e.QueryParams().Encode(),
+	s.renderTemplate(w, "signin.html", map[string]any{
+		"flashes":     getFlashesFromSession(w, r, sess),
+		"QueryParams": r.URL.Query().Encode(),
 	})
 }
 
-func (s *Server) handleAccountSigninPost(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleAccountSigninPost")
 
-	var req OauthSigninInput
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding sign in req", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := r.ParseForm(); err != nil {
+		logger.Error("error parsing sign in form", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	sess, _ := session.Get(s.config.SessionCookieKey, e)
+	req := OauthSigninInput{
+		Username:        r.FormValue("username"),
+		Password:        r.FormValue("password"),
+		AuthFactorToken: r.FormValue("token"),
+		QueryParams:     r.FormValue("query_params"),
+	}
+
+	sess, _ := s.sessions.Get(r, s.config.SessionCookieKey)
 
 	req.Username = strings.ToLower(req.Username)
 	var idtype string
@@ -109,8 +116,9 @@ func (s *Server) handleAccountSigninPost(e echo.Context) error {
 		} else {
 			sess.AddFlash("Something went wrong!", "error")
 		}
-		sess.Save(e.Request(), e.Response())
-		return e.Redirect(303, "/account/signin"+queryParams)
+		sess.Save(r, w)
+		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(repo.Password), []byte(req.Password)); err != nil {
@@ -119,8 +127,9 @@ func (s *Server) handleAccountSigninPost(e echo.Context) error {
 		} else {
 			sess.AddFlash("Something went wrong!", "error")
 		}
-		sess.Save(e.Request(), e.Response())
-		return e.Redirect(303, "/account/signin"+queryParams)
+		sess.Save(r, w)
+		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		return
 	}
 
 	// if repo requires 2FA token and one hasn't been provided, return error prompting for one
@@ -128,36 +137,42 @@ func (s *Server) handleAccountSigninPost(e echo.Context) error {
 		err = s.createAndSendTwoFactorCode(ctx, repo)
 		if err != nil {
 			sess.AddFlash("Something went wrong!", "error")
-			sess.Save(e.Request(), e.Response())
-			return e.Redirect(303, "/account/signin"+queryParams)
+			sess.Save(r, w)
+			http.Redirect(w, r, "/account/signin"+queryParams, 303)
+			return
 		}
 
 		sess.AddFlash("requires 2FA token", "tokenrequired")
-		sess.Save(e.Request(), e.Response())
-		return e.Redirect(303, "/account/signin"+queryParams)
+		sess.Save(r, w)
+		http.Redirect(w, r, "/account/signin"+queryParams, 303)
+		return
 	}
 
-	// if 2FAis required, now check that the one provided is valid
+	// if 2FA is required, now check that the one provided is valid
 	if repo.TwoFactorType != models.TwoFactorTypeNone {
 		if repo.TwoFactorCode == nil || repo.TwoFactorCodeExpiresAt == nil {
 			err = s.createAndSendTwoFactorCode(ctx, repo)
 			if err != nil {
 				sess.AddFlash("Something went wrong!", "error")
-				sess.Save(e.Request(), e.Response())
-				return e.Redirect(303, "/account/signin"+queryParams)
+				sess.Save(r, w)
+				http.Redirect(w, r, "/account/signin"+queryParams, 303)
+				return
 			}
 
 			sess.AddFlash("requires 2FA token", "tokenrequired")
-			sess.Save(e.Request(), e.Response())
-			return e.Redirect(303, "/account/signin"+queryParams)
+			sess.Save(r, w)
+			http.Redirect(w, r, "/account/signin"+queryParams, 303)
+			return
 		}
 
 		if *repo.TwoFactorCode != req.AuthFactorToken {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		if time.Now().UTC().After(*repo.TwoFactorCodeExpiresAt) {
-			return helpers.ExpiredTokenError(e)
+			helpers.ExpiredTokenError(w)
+			return
 		}
 	}
 
@@ -170,13 +185,14 @@ func (s *Server) handleAccountSigninPost(e echo.Context) error {
 	sess.Values = map[any]any{}
 	sess.Values["did"] = repo.Repo.Did
 
-	if err := sess.Save(e.Request(), e.Response()); err != nil {
-		return err
+	if err := sess.Save(r, w); err != nil {
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if queryParams != "" {
-		return e.Redirect(303, "/oauth/authorize"+queryParams)
+		http.Redirect(w, r, "/oauth/authorize"+queryParams, 303)
 	} else {
-		return e.Redirect(303, "/account")
+		http.Redirect(w, r, "/account", 303)
 	}
 }

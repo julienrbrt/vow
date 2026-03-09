@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,7 +19,6 @@ import (
 	"github.com/bluesky-social/indigo/util"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -37,39 +38,43 @@ type ComAtprotoServerCreateAccountResponse struct {
 	Did        string `json:"did"`
 }
 
-func (s *Server) handleCreateAccount(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerCreateAccount")
 
 	var request ComAtprotoServerCreateAccountRequest
 
-	if err := e.Bind(&request); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		logger.Error("error receiving request", "endpoint", "com.atproto.server.createAccount", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	request.Handle = strings.ToLower(request.Handle)
 
-	if err := e.Validate(request); err != nil {
+	if err := s.validator.Struct(request); err != nil {
 		logger.Error("error validating request", "endpoint", "com.atproto.server.createAccount", "error", err)
 
 		var verr ValidationError
 		if errors.As(err, &verr) {
 			if verr.Field == "Email" {
-				// TODO: what is this supposed to be? `InvalidEmail` isn't listed in doc
-				return helpers.InputError(e, to.StringPtr("InvalidEmail"))
+				helpers.InputError(w, to.StringPtr("InvalidEmail"))
+				return
 			}
 
 			if verr.Field == "Handle" {
-				return helpers.InputError(e, to.StringPtr("InvalidHandle"))
+				helpers.InputError(w, to.StringPtr("InvalidHandle"))
+				return
 			}
 
 			if verr.Field == "Password" {
-				return helpers.InputError(e, to.StringPtr("InvalidPassword"))
+				helpers.InputError(w, to.StringPtr("InvalidPassword"))
+				return
 			}
 
 			if verr.Field == "InviteCode" {
-				return helpers.InputError(e, to.StringPtr("InvalidInviteCode"))
+				helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+				return
 			}
 		}
 	}
@@ -78,19 +83,22 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 	if request.Did != nil {
 		signupDid = *request.Did
 
-		token := strings.TrimSpace(strings.Replace(e.Request().Header.Get("authorization"), "Bearer ", "", 1))
+		token := strings.TrimSpace(strings.Replace(r.Header.Get("authorization"), "Bearer ", "", 1))
 		if token == "" {
-			return helpers.UnauthorizedError(e, to.StringPtr("must authenticate to use an existing did"))
+			helpers.UnauthorizedError(w, to.StringPtr("must authenticate to use an existing did"))
+			return
 		}
-		authDid, err := s.validateServiceAuth(e.Request().Context(), token, "com.atproto.server.createAccount")
+		authDid, err := s.validateServiceAuth(r.Context(), token, "com.atproto.server.createAccount")
 
 		if err != nil {
 			logger.Warn("error validating authorization token", "endpoint", "com.atproto.server.createAccount", "error", err)
-			return helpers.UnauthorizedError(e, to.StringPtr("invalid authorization token"))
+			helpers.UnauthorizedError(w, to.StringPtr("invalid authorization token"))
+			return
 		}
 
 		if authDid != signupDid {
-			return helpers.ForbiddenError(e, to.StringPtr("auth did did not match signup did"))
+			helpers.ForbiddenError(w, to.StringPtr("auth did did not match signup did"))
+			return
 		}
 	}
 
@@ -98,32 +106,39 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 	actor, err := s.getActorByHandle(ctx, request.Handle)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Error("error looking up handle in db", "endpoint", "com.atproto.server.createAccount", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	if err == nil && actor.Did != signupDid {
-		return helpers.InputError(e, to.StringPtr("HandleNotAvailable"))
+		helpers.InputError(w, to.StringPtr("HandleNotAvailable"))
+		return
 	}
 
-	if did, err := s.passport.ResolveHandle(e.Request().Context(), request.Handle); err == nil && did != signupDid {
-		return helpers.InputError(e, to.StringPtr("HandleNotAvailable"))
+	if did, err := s.passport.ResolveHandle(r.Context(), request.Handle); err == nil && did != signupDid {
+		helpers.InputError(w, to.StringPtr("HandleNotAvailable"))
+		return
 	}
 
 	var ic models.InviteCode
 	if s.config.RequireInvite {
 		if strings.TrimSpace(request.InviteCode) == "" {
-			return helpers.InputError(e, to.StringPtr("InvalidInviteCode"))
+			helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+			return
 		}
 
 		if err := s.db.Raw(ctx, "SELECT * FROM invite_codes WHERE code = ?", nil, request.InviteCode).Scan(&ic).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
-				return helpers.InputError(e, to.StringPtr("InvalidInviteCode"))
+				helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+				return
 			}
 			logger.Error("error getting invite code from db", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if ic.RemainingUseCount < 1 {
-			return helpers.InputError(e, to.StringPtr("InvalidInviteCode"))
+			helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+			return
 		}
 	}
 
@@ -131,10 +146,12 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 	existingRepo, err := s.getRepoByEmail(ctx, request.Email)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Error("error looking up email in db", "endpoint", "com.atproto.server.createAccount", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	if err == nil && existingRepo.Did != signupDid {
-		return helpers.InputError(e, to.StringPtr("EmailNotAvailable"))
+		helpers.InputError(w, to.StringPtr("EmailNotAvailable"))
+		return
 	}
 
 	// TODO: unsupported domains
@@ -165,7 +182,8 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 		k, err = atcrypto.GeneratePrivateKeyK256()
 		if err != nil {
 			logger.Error("error creating signing key", "endpoint", "com.atproto.server.createAccount", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 	}
 
@@ -173,12 +191,14 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 		did, op, err := s.plcClient.CreateDID(k, "", request.Handle)
 		if err != nil {
 			logger.Error("error creating operation", "endpoint", "com.atproto.server.createAccount", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		if err := s.plcClient.SendOperation(e.Request().Context(), did, op); err != nil {
+		if err := s.plcClient.SendOperation(r.Context(), did, op); err != nil {
 			logger.Error("error sending plc op", "endpoint", "com.atproto.server.createAccount", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 		signupDid = did
 	}
@@ -186,7 +206,8 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 	hashed, err := bcrypt.GenerateFromPassword([]byte(request.Password), 10)
 	if err != nil {
 		logger.Error("error hashing password", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	urepo := models.Repo{
@@ -206,17 +227,20 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 
 		if err := s.db.Create(ctx, &urepo, nil).Error; err != nil {
 			logger.Error("error inserting new repo", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if err := s.db.Create(ctx, &actor, nil).Error; err != nil {
 			logger.Error("error inserting new actor", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 	} else {
 		if err := s.db.Save(ctx, &actor, nil).Error; err != nil {
 			logger.Error("error inserting new actor", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 	}
 
@@ -234,12 +258,14 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 		root, rev, err := commitRepo(context.TODO(), bs, r, urepo.SigningKey)
 		if err != nil {
 			logger.Error("error committing", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if err := s.UpdateRepo(context.TODO(), urepo.Did, root, rev); err != nil {
 			logger.Error("error updating repo after commit", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
@@ -255,14 +281,16 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 	if s.config.RequireInvite {
 		if err := s.db.Raw(ctx, "UPDATE invite_codes SET remaining_use_count = remaining_use_count - 1 WHERE code = ?", nil, request.InviteCode).Scan(&ic).Error; err != nil {
 			logger.Error("error decrementing use count", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 	}
 
 	sess, err := s.createSession(ctx, &urepo)
 	if err != nil {
 		logger.Error("error creating new session", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	go func() {
@@ -274,7 +302,7 @@ func (s *Server) handleCreateAccount(e echo.Context) error {
 		}
 	}()
 
-	return e.JSON(200, ComAtprotoServerCreateAccountResponse{
+	s.writeJSON(w, 200, ComAtprotoServerCreateAccountResponse{
 		AccessJwt:  sess.AccessToken,
 		RefreshJwt: sess.RefreshToken,
 		Handle:     request.Handle,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -13,19 +14,19 @@ import (
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipld/go-car"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleRepoImportRepo(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleImportRepo")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	b, err := io.ReadAll(e.Request().Body)
+	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		logger.Error("could not read bytes in import request", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	bs := s.getBlockstore(urepo.Repo.Did)
@@ -33,14 +34,16 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 	cs, err := car.NewCarReader(bytes.NewReader(b))
 	if err != nil {
 		logger.Error("could not read car in import request", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	orderedBlocks := []blocks.Block{}
 	currBlock, err := cs.Next()
 	if err != nil {
 		logger.Error("could not get first block from car", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	currBlockCt := 1
 
@@ -56,13 +59,15 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 
 	if err := bs.PutMany(context.TODO(), orderedBlocks); err != nil {
 		logger.Error("could not insert blocks", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	r, err := openRepo(context.TODO(), bs, cs.Header.Roots[0], urepo.Repo.Did)
 	if err != nil {
 		logger.Error("could not open repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	tx := s.db.Begin(ctx)
@@ -73,11 +78,11 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 		pts := strings.Split(string(key), "/")
 		nsid := pts[0]
 		rkey := pts[1]
-		cidStr := cid.String()
-		b, err := bs.Get(context.TODO(), cid)
+		cidStr := c.String()
+		blkData, err := bs.Get(context.TODO(), c)
 		if err != nil {
 			logger.Error("record bytes don't exist in blockstore", "error", err)
-			return helpers.ServerError(e, nil)
+			return err
 		}
 
 		rec := models.Record{
@@ -86,7 +91,7 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 			Nsid:      nsid,
 			Rkey:      rkey,
 			Cid:       cidStr,
-			Value:     b.RawData(),
+			Value:     blkData.RawData(),
 		}
 
 		if err := tx.Save(rec).Error; err != nil {
@@ -96,8 +101,9 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 		return nil
 	}); err != nil {
 		tx.Rollback()
-		logger.Error("record bytes don't exist in blockstore", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error iterating repo blocks", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	tx.Commit()
@@ -105,13 +111,15 @@ func (s *Server) handleRepoImportRepo(e echo.Context) error {
 	root, rev, err := commitRepo(context.TODO(), bs, r, urepo.Repo.SigningKey)
 	if err != nil {
 		logger.Error("error committing", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.UpdateRepo(context.TODO(), urepo.Repo.Did, root, rev); err != nil {
 		logger.Error("error updating repo after commit", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return nil
+	w.WriteHeader(http.StatusOK)
 }

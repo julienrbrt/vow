@@ -1,26 +1,29 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleGetRecommendedDidCredentials(e echo.Context) error {
+func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleIdentityGetRecommendedDidCredentials")
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 	k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
 	if err != nil {
 		logger.Error("error parsing key", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	creds, err := s.plcClient.CreateDidCredentials(k, "", repo.Actor.Handle)
 	if err != nil {
-		logger.Error("error crating did credentials", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error creating did credentials", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, creds)
+	s.writeJSON(w, 200, creds)
 }

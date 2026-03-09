@@ -1,6 +1,6 @@
 package server
 
-import "github.com/labstack/echo/v4"
+import "net/http"
 
 type ComAtprotoServerDescribeServerResponseLinks struct {
 	PrivacyPolicy  *string `json:"privacyPolicy,omitempty"`
@@ -20,8 +20,8 @@ type ComAtprotoServerDescribeServerResponse struct {
 	Did                       string                                        `json:"did"`
 }
 
-func (s *Server) handleDescribeServer(e echo.Context) error {
-	return e.JSON(200, ComAtprotoServerDescribeServerResponse{
+func (s *Server) handleDescribeServer(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, ComAtprotoServerDescribeServerResponse{
 		InviteCodeRequired:        s.config.RequireInvite,
 		PhoneVerificationRequired: false,
 		AvailableUserDomains:      []string{"." + s.config.Hostname}, // TODO: more

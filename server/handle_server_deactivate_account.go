@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
@@ -10,7 +11,6 @@ import (
 	"github.com/bluesky-social/indigo/util"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerDeactivateAccountRequest struct {
@@ -18,21 +18,16 @@ type ComAtprotoServerDeactivateAccountRequest struct {
 	DeleteAfter time.Time `json:"deleteAfter"`
 }
 
-func (s *Server) handleServerDeactivateAccount(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerDeactivateAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerDeactivateAccount")
 
-	var req ComAtprotoServerDeactivateAccountRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
-	}
-
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET deactivated = ? WHERE did = ?", nil, true, urepo.Repo.Did).Error; err != nil {
 		logger.Error("error updating account status to deactivated", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
@@ -45,5 +40,5 @@ func (s *Server) handleServerDeactivateAccount(e echo.Context) error {
 		},
 	})
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

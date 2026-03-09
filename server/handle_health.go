@@ -1,9 +1,9 @@
 package server
 
-import "github.com/labstack/echo/v4"
+import "net/http"
 
-func (s *Server) handleHealth(e echo.Context) error {
-	return e.JSON(200, map[string]string{
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, map[string]string{
 		"version": "cocoon " + s.config.Version,
 	})
 }

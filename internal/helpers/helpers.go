@@ -3,12 +3,12 @@ package helpers
 import (
 	crand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"math/rand"
+	"net/http"
 	"net/url"
 
-	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/labstack/echo/v4"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
@@ -16,52 +16,59 @@ import (
 // /^[A-Z2-7]{5}-[A-Z2-7]{5}$/
 var letters = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
-func InputError(e echo.Context, custom *string) error {
+func writeJSON(w http.ResponseWriter, status int, v any) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	return json.NewEncoder(w).Encode(v)
+}
+
+func InputError(w http.ResponseWriter, custom *string) error {
 	msg := "InvalidRequest"
 	if custom != nil {
 		msg = *custom
 	}
-	return genericError(e, 400, msg)
+	return genericError(w, http.StatusBadRequest, msg)
 }
 
-func ServerError(e echo.Context, suffix *string) error {
+func ServerError(w http.ResponseWriter, suffix *string) error {
 	msg := "Internal server error"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(e, 500, msg)
+	return genericError(w, http.StatusInternalServerError, msg)
 }
 
-func UnauthorizedError(e echo.Context, suffix *string) error {
+func UnauthorizedError(w http.ResponseWriter, suffix *string) error {
 	msg := "Unauthorized"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(e, 401, msg)
+	return genericError(w, http.StatusUnauthorized, msg)
 }
 
-func ForbiddenError(e echo.Context, suffix *string) error {
+func ForbiddenError(w http.ResponseWriter, suffix *string) error {
 	msg := "Forbidden"
 	if suffix != nil {
 		msg += ". " + *suffix
 	}
-	return genericError(e, 403, msg)
+	return genericError(w, http.StatusForbidden, msg)
 }
 
-func InvalidTokenError(e echo.Context) error {
-	return InputError(e, to.StringPtr("InvalidToken"))
+func InvalidTokenError(w http.ResponseWriter) error {
+	s := "InvalidToken"
+	return InputError(w, &s)
 }
 
-func ExpiredTokenError(e echo.Context) error {
+func ExpiredTokenError(w http.ResponseWriter) error {
 	// WARN: See https://github.com/bluesky-social/atproto/discussions/3319
-	return e.JSON(400, map[string]string{
+	return writeJSON(w, http.StatusBadRequest, map[string]string{
 		"error":   "ExpiredToken",
 		"message": "*",
 	})
 }
 
-func genericError(e echo.Context, code int, msg string) error {
-	return e.JSON(code, map[string]string{
+func genericError(w http.ResponseWriter, code int, msg string) error {
+	return writeJSON(w, code, map[string]string{
 		"error": msg,
 	})
 }

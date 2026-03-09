@@ -1,26 +1,29 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleDeleteSession(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
-	token := e.Get("token").(string)
+	token, _ := getContextValue[string](r, contextKeyToken)
 
 	var acctok models.Token
 	if err := s.db.Raw(ctx, "DELETE FROM tokens WHERE token = ? RETURNING *", nil, token).Scan(&acctok).Error; err != nil {
 		s.logger.Error("error deleting access token from db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.db.Exec(ctx, "DELETE FROM refresh_tokens WHERE token = ?", nil, acctok.RefreshToken).Error; err != nil {
 		s.logger.Error("error deleting refresh token from db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

@@ -1,8 +1,9 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerGetSessionResponse struct {
@@ -15,10 +16,10 @@ type ComAtprotoServerGetSessionResponse struct {
 	Status          *string `json:"status,omitempty"`
 }
 
-func (s *Server) handleGetSession(e echo.Context) error {
-	repo := e.Get("repo").(*models.RepoActor)
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	return e.JSON(200, ComAtprotoServerGetSessionResponse{
+	s.writeJSON(w, 200, ComAtprotoServerGetSessionResponse{
 		Handle:          repo.Handle,
 		Did:             repo.Repo.Did,
 		Email:           repo.Email,

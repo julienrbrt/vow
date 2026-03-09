@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/http"
 	"strconv"
 
 	"github.com/Azure/go-autorest/autorest/to"
@@ -8,7 +9,6 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoRepoListRecordsRequest struct {
@@ -30,9 +30,9 @@ type ComAtprotoRepoListRecordsRecordItem struct {
 	Value map[string]any `json:"value"`
 }
 
-func getLimitFromContext(e echo.Context, def int) (int, error) {
+func getLimitFromRequest(r *http.Request, def int) (int, error) {
 	limit := def
-	limitstr := e.QueryParam("limit")
+	limitstr := r.URL.Query().Get("limit")
 
 	if limitstr != "" {
 		l64, err := strconv.ParseInt(limitstr, 10, 32)
@@ -45,29 +45,33 @@ func getLimitFromContext(e echo.Context, def int) (int, error) {
 	return limit, nil
 }
 
-func (s *Server) handleListRecords(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleListRecords(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleListRecords")
 
-	var req ComAtprotoRepoListRecordsRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("could not bind list records request", "error", err)
-		return helpers.ServerError(e, nil)
+	req := ComAtprotoRepoListRecordsRequest{
+		Repo:       r.URL.Query().Get("repo"),
+		Collection: r.URL.Query().Get("collection"),
+		Cursor:     r.URL.Query().Get("cursor"),
+	}
+	if v := r.URL.Query().Get("reverse"); v == "true" {
+		req.Reverse = true
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
-	if req.Limit <= 0 {
-		req.Limit = 50
-	} else if req.Limit > 100 {
-		req.Limit = 100
-	}
-
-	limit, err := getLimitFromContext(e, 50)
+	limit, err := getLimitFromRequest(r, 50)
 	if err != nil {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
+	}
+	if limit <= 0 {
+		limit = 50
+	} else if limit > 100 {
+		limit = 100
 	}
 
 	sort := "DESC"
@@ -83,7 +87,8 @@ func (s *Server) handleListRecords(e echo.Context) error {
 	if _, err := syntax.ParseDID(did); err != nil {
 		actor, err := s.getActorByHandle(ctx, req.Repo)
 		if err != nil {
-			return helpers.InputError(e, to.StringPtr("RepoNotFound"))
+			helpers.InputError(w, to.StringPtr("RepoNotFound"))
+			return
 		}
 		did = actor.Did
 	}
@@ -98,19 +103,21 @@ func (s *Server) handleListRecords(e echo.Context) error {
 	var records []models.Record
 	if err := s.db.Raw(ctx, "SELECT * FROM records WHERE did = ? AND nsid = ? "+cursorquery+" ORDER BY created_at "+sort+" limit ?", nil, params...).Scan(&records).Error; err != nil {
 		logger.Error("error getting records", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	items := []ComAtprotoRepoListRecordsRecordItem{}
-	for _, r := range records {
-		val, err := atdata.UnmarshalCBOR(r.Value)
+	for _, rec := range records {
+		val, err := atdata.UnmarshalCBOR(rec.Value)
 		if err != nil {
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		items = append(items, ComAtprotoRepoListRecordsRecordItem{
-			Uri:   "at://" + r.Did + "/" + r.Nsid + "/" + r.Rkey,
-			Cid:   r.Cid,
+			Uri:   "at://" + rec.Did + "/" + rec.Nsid + "/" + rec.Rkey,
+			Cid:   rec.Cid,
 			Value: val,
 		})
 	}
@@ -120,7 +127,7 @@ func (s *Server) handleListRecords(e echo.Context) error {
 		newcursor = to.StringPtr(records[len(records)-1].CreatedAt)
 	}
 
-	return e.JSON(200, ComAtprotoRepoListRecordsResponse{
+	s.writeJSON(w, 200, ComAtprotoRepoListRecordsResponse{
 		Cursor:  newcursor,
 		Records: items,
 	})

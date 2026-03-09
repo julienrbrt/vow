@@ -1,35 +1,45 @@
 package server
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleProxyBskyFeedGetFeed(e echo.Context) error {
-	feedUri, err := syntax.ParseATURI(e.QueryParam("feed"))
+func (s *Server) handleProxyBskyFeedGetFeed(w http.ResponseWriter, r *http.Request) {
+	feedUri, err := syntax.ParseATURI(r.URL.Query().Get("feed"))
 	if err != nil {
-		return helpers.InputError(e, to.StringPtr("invalid feed uri"))
+		helpers.InputError(w, to.StringPtr("invalid feed uri"))
+		return
 	}
 
-	appViewEndpoint, _, err := s.getAtprotoProxyEndpointFromRequest(e)
+	appViewEndpoint, _, err := s.getAtprotoProxyEndpointFromRequest(r)
 	if err != nil {
-		e.Logger().Error("could not get atproto proxy", "error", err)
-		return helpers.ServerError(e, nil)
+		s.logger.Error("could not get atproto proxy", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	appViewClient := xrpc.Client{
 		Host: appViewEndpoint,
 	}
-	feedRecord, err := atproto.RepoGetRecord(e.Request().Context(), &appViewClient, "", feedUri.Collection().String(), feedUri.Authority().String(), feedUri.RecordKey().String())
+	feedRecord, err := atproto.RepoGetRecord(r.Context(), &appViewClient, "", feedUri.Collection().String(), feedUri.Authority().String(), feedUri.RecordKey().String())
+	if err != nil {
+		s.logger.Error("could not get feed record", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
 	feedGeneratorDid := feedRecord.Value.Val.(*bsky.FeedGenerator).Did
 
-	e.Set("proxyTokenLxm", "app.bsky.feed.getFeedSkeleton")
-	e.Set("proxyTokenAud", feedGeneratorDid)
+	// Inject proxy token overrides into the request context so handleProxy can read them.
+	ctx := context.WithValue(r.Context(), contextKeyProxyTokenLxm, "app.bsky.feed.getFeedSkeleton")
+	ctx = context.WithValue(ctx, contextKeyProxyTokenAud, feedGeneratorDid)
 
-	return s.handleProxy(e)
+	s.handleProxy(w, r.WithContext(ctx))
 }

@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -34,25 +35,28 @@ type ComAtprotoServerCreateSessionResponse struct {
 	Status          *string `json:"status,omitempty"`
 }
 
-func (s *Server) handleCreateSession(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerCreateSession")
 
 	var req ComAtprotoServerCreateSessionRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding request", "endpoint", "com.atproto.server.serverCreateSession", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding request", "endpoint", "com.atproto.server.serverCreateSession", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
+	if err := s.validator.Struct(req); err != nil {
 		var verr ValidationError
 		if errors.As(err, &verr) {
 			if verr.Field == "Identifier" {
-				return helpers.InputError(e, to.StringPtr("InvalidRequest"))
+				helpers.InputError(w, to.StringPtr("InvalidRequest"))
+				return
 			}
 
 			if verr.Field == "Password" {
-				return helpers.InputError(e, to.StringPtr("InvalidRequest"))
+				helpers.InputError(w, to.StringPtr("InvalidRequest"))
+				return
 			}
 		}
 	}
@@ -80,18 +84,21 @@ func (s *Server) handleCreateSession(e echo.Context) error {
 
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return helpers.InputError(e, to.StringPtr("InvalidRequest"))
+			helpers.InputError(w, to.StringPtr("InvalidRequest"))
+			return
 		}
 
-		logger.Error("erorr looking up repo", "endpoint", "com.atproto.server.createSession", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error looking up repo", "endpoint", "com.atproto.server.createSession", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(repo.Password), []byte(req.Password)); err != nil {
 		if err != bcrypt.ErrMismatchedHashAndPassword {
-			logger.Error("erorr comparing hash and password", "error", err)
+			logger.Error("error comparing hash and password", "error", err)
 		}
-		return helpers.InputError(e, to.StringPtr("InvalidRequest"))
+		helpers.InputError(w, to.StringPtr("InvalidRequest"))
+		return
 	}
 
 	// if repo requires 2FA token and one hasn't been provided, return error prompting for one
@@ -99,10 +106,12 @@ func (s *Server) handleCreateSession(e echo.Context) error {
 		err = s.createAndSendTwoFactorCode(ctx, repo)
 		if err != nil {
 			logger.Error("sending 2FA code", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		return helpers.InputError(e, to.StringPtr("AuthFactorTokenRequired"))
+		helpers.InputError(w, to.StringPtr("AuthFactorTokenRequired"))
+		return
 	}
 
 	// if 2FA is required, now check that the one provided is valid
@@ -111,28 +120,33 @@ func (s *Server) handleCreateSession(e echo.Context) error {
 			err = s.createAndSendTwoFactorCode(ctx, repo)
 			if err != nil {
 				logger.Error("sending 2FA code", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 
-			return helpers.InputError(e, to.StringPtr("AuthFactorTokenRequired"))
+			helpers.InputError(w, to.StringPtr("AuthFactorTokenRequired"))
+			return
 		}
 
 		if *repo.TwoFactorCode != *req.AuthFactorToken {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		if time.Now().UTC().After(*repo.TwoFactorCodeExpiresAt) {
-			return helpers.ExpiredTokenError(e)
+			helpers.ExpiredTokenError(w)
+			return
 		}
 	}
 
 	sess, err := s.createSession(ctx, &repo.Repo)
 	if err != nil {
 		logger.Error("error creating session", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoServerCreateSessionResponse{
+	s.writeJSON(w, 200, ComAtprotoServerCreateSessionResponse{
 		AccessJwt:       sess.AccessToken,
 		RefreshJwt:      sess.RefreshToken,
 		Handle:          repo.Handle,

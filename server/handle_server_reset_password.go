@@ -1,12 +1,13 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -15,44 +16,51 @@ type ComAtprotoServerResetPasswordRequest struct {
 	Password string `json:"password" validate:"required"`
 }
 
-func (s *Server) handleServerResetPassword(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerResetPassword(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerResetPassword")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoServerResetPasswordRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
 	if urepo.PasswordResetCode == nil || urepo.PasswordResetCodeExpiresAt == nil {
-		return helpers.InputError(e, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		return
 	}
 
 	if *urepo.PasswordResetCode != req.Token {
-		return helpers.InvalidTokenError(e)
+		helpers.InvalidTokenError(w)
+		return
 	}
 
 	if time.Now().UTC().After(*urepo.PasswordResetCodeExpiresAt) {
-		return helpers.ExpiredTokenError(e)
+		helpers.ExpiredTokenError(w)
+		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 10)
 	if err != nil {
 		logger.Error("error creating hash", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET password_reset_code = NULL, password_reset_code_expires_at = NULL, password = ? WHERE did = ?", nil, hash, urepo.Repo.Did).Error; err != nil {
 		logger.Error("error updating repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

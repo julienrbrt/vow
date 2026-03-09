@@ -1,13 +1,13 @@
 package server
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/haileyok/cocoon/identity"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
 
@@ -19,27 +19,30 @@ type ComAtprotoRepoDescribeRepoResponse struct {
 	HandleIsCorrect bool            `json:"handleIsCorrect"`
 }
 
-func (s *Server) handleDescribeRepo(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleDescribeRepo(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleDescribeRepo")
 
-	did := e.QueryParam("repo")
+	did := r.URL.Query().Get("repo")
 	repo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return helpers.InputError(e, to.StringPtr("RepoNotFound"))
+			helpers.InputError(w, to.StringPtr("RepoNotFound"))
+			return
 		}
 
 		logger.Error("error looking up repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	handleIsCorrect := true
 
-	diddoc, err := s.passport.FetchDoc(e.Request().Context(), repo.Repo.Did)
+	diddoc, err := s.passport.FetchDoc(r.Context(), repo.Repo.Did)
 	if err != nil {
 		logger.Error("error fetching diddoc", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	dochandle := ""
@@ -55,10 +58,11 @@ func (s *Server) handleDescribeRepo(e echo.Context) error {
 	}
 
 	if handleIsCorrect {
-		resolvedDid, err := s.passport.ResolveHandle(e.Request().Context(), repo.Handle)
+		resolvedDid, err := s.passport.ResolveHandle(r.Context(), repo.Handle)
 		if err != nil {
-			e.Logger().Error("error resolving handle", "error", err)
-			return helpers.ServerError(e, nil)
+			logger.Error("error resolving handle", "error", err)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if resolvedDid != repo.Repo.Did {
@@ -69,15 +73,16 @@ func (s *Server) handleDescribeRepo(e echo.Context) error {
 	var records []models.Record
 	if err := s.db.Raw(ctx, "SELECT DISTINCT(nsid) FROM records WHERE did = ?", nil, repo.Repo.Did).Scan(&records).Error; err != nil {
 		logger.Error("error getting collections", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	var collections []string = make([]string, 0, len(records))
-	for _, r := range records {
-		collections = append(collections, r.Nsid)
+	collections := make([]string, 0, len(records))
+	for _, rec := range records {
+		collections = append(collections, rec.Nsid)
 	}
 
-	return e.JSON(200, ComAtprotoRepoDescribeRepoResponse{
+	s.writeJSON(w, 200, ComAtprotoRepoDescribeRepoResponse{
 		Did:             repo.Repo.Did,
 		Handle:          repo.Handle,
 		DidDoc:          *diddoc,

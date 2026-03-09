@@ -10,45 +10,50 @@ import (
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleSyncGetBlob(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleSyncGetBlob")
 
-	did := e.QueryParam("did")
+	did := r.URL.Query().Get("did")
 	if did == "" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
-	cstr := e.QueryParam("cid")
+	cstr := r.URL.Query().Get("cid")
 	if cstr == "" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	c, err := cid.Parse(cstr)
 	if err != nil {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	urepo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
 		logger.Error("could not find user for requested blob", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	status := urepo.Status()
 	if status != nil {
 		if *status == "deactivated" {
-			return helpers.InputError(e, to.StringPtr("RepoDeactivated"))
+			helpers.InputError(w, to.StringPtr("RepoDeactivated"))
+			return
 		}
 	}
 
 	var blob models.Blob
 	if err := s.db.Raw(ctx, "SELECT * FROM blobs WHERE did = ? AND cid = ?", nil, did, c.Bytes()).Scan(&blob).Error; err != nil {
 		logger.Error("error looking up blob", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	buf := new(bytes.Buffer)
@@ -58,7 +63,8 @@ func (s *Server) handleSyncGetBlob(e echo.Context) error {
 		var parts []models.BlobPart
 		if err := s.db.Raw(ctx, "SELECT * FROM blob_parts WHERE blob_id = ? ORDER BY idx", nil, blob.ID).Scan(&parts).Error; err != nil {
 			logger.Error("error getting blob parts", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		for _, p := range parts {
@@ -68,14 +74,16 @@ func (s *Server) handleSyncGetBlob(e echo.Context) error {
 	case "ipfs":
 		if s.ipfsConfig == nil || !s.ipfsConfig.BlobstoreEnabled {
 			logger.Error("ipfs storage disabled")
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		// If a public gateway is configured, redirect the client directly to it
 		// instead of proxying the content through this server.
 		if s.ipfsConfig.GatewayURL != "" {
 			redirectURL := fmt.Sprintf("%s/ipfs/%s", s.ipfsConfig.GatewayURL, c.String())
-			return e.Redirect(302, redirectURL)
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+			return
 		}
 
 		// Otherwise fetch from the local Kubo node via /api/v0/cat and stream
@@ -83,18 +91,21 @@ func (s *Server) handleSyncGetBlob(e echo.Context) error {
 		data, err := s.fetchBlobFromIPFS(c.String())
 		if err != nil {
 			logger.Error("error fetching blob from ipfs node", "cid", c.String(), "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 		buf.Write(data)
 
 	default:
 		logger.Error("unknown storage", "storage", blob.Storage)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	e.Response().Header().Set(echo.HeaderContentDisposition, "attachment; filename="+c.String())
-
-	return e.Stream(200, "application/octet-stream", buf)
+	w.Header().Set("Content-Disposition", "attachment; filename="+c.String())
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, buf)
 }
 
 // fetchBlobFromIPFS retrieves blob data for the given CID from the local Kubo

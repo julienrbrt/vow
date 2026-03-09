@@ -1,22 +1,23 @@
 package server
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/haileyok/cocoon/oauth"
 	"github.com/haileyok/cocoon/oauth/constants"
 	"github.com/haileyok/cocoon/oauth/provider"
 	"github.com/hako/durafmt"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleAccount(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleAuth")
 
-	repo, sess, err := s.getSessionRepoOrErr(e)
+	repo, sess, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		return e.Redirect(303, "/account/signin")
+		http.Redirect(w, r, "/account/signin", 303)
+		return
 	}
 
 	oldestPossibleSession := time.Now().Add(constants.ConfidentialClientSessionLifetime)
@@ -25,10 +26,11 @@ func (s *Server) handleAccount(e echo.Context) error {
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_tokens WHERE sub = ? AND created_at < ? ORDER BY created_at ASC", nil, repo.Repo.Did, oldestPossibleSession).Scan(&tokens).Error; err != nil {
 		logger.Error("couldnt fetch oauth sessions for account", "did", repo.Repo.Did, "error", err)
 		sess.AddFlash("Unable to fetch sessions. See server logs for more details.", "error")
-		sess.Save(e.Request(), e.Response())
-		return e.Render(200, "account.html", map[string]any{
-			"flashes": getFlashesFromSession(e, sess),
+		sess.Save(r, w)
+		s.renderTemplate(w, "account.html", map[string]any{
+			"flashes": getFlashesFromSession(w, r, sess),
 		})
+		return
 	}
 
 	var filtered []provider.OauthToken
@@ -68,9 +70,9 @@ func (s *Server) handleAccount(e echo.Context) error {
 		})
 	}
 
-	return e.Render(200, "account.html", map[string]any{
+	s.renderTemplate(w, "account.html", map[string]any{
 		"Repo":    repo,
 		"Tokens":  tokenInfo,
-		"flashes": getFlashesFromSession(e, sess),
+		"flashes": getFlashesFromSession(w, r, sess),
 	})
 }

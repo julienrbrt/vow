@@ -1,9 +1,10 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSyncGetLatestCommitResponse struct {
@@ -11,25 +12,31 @@ type ComAtprotoSyncGetLatestCommitResponse struct {
 	Rev string `json:"rev"`
 }
 
-func (s *Server) handleSyncGetLatestCommit(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleSyncGetLatestCommit(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	logger := s.logger.With("name", "handleSyncGetLatestCommit")
 
-	did := e.QueryParam("did")
+	did := r.URL.Query().Get("did")
 	if did == "" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	urepo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
-		return err
+		logger.Error("could not find repo", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	c, err := cid.Cast(urepo.Root)
 	if err != nil {
-		return err
+		logger.Error("could not cast root cid", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoSyncGetLatestCommitResponse{
+	s.writeJSON(w, http.StatusOK, ComAtprotoSyncGetLatestCommitResponse{
 		Cid: c.String(),
 		Rev: urepo.Rev,
 	})

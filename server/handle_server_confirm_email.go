@@ -1,12 +1,13 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerConfirmEmailRequest struct {
@@ -14,40 +15,46 @@ type ComAtprotoServerConfirmEmailRequest struct {
 	Token string `json:"token" validate:"required"`
 }
 
-func (s *Server) handleServerConfirmEmail(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerConfirmEmail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerConfirmEmail")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoServerConfirmEmailRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
 	if urepo.EmailVerificationCode == nil || urepo.EmailVerificationCodeExpiresAt == nil {
-		return helpers.ExpiredTokenError(e)
+		helpers.ExpiredTokenError(w)
+		return
 	}
 
 	if *urepo.EmailVerificationCode != req.Token {
-		return helpers.InputError(e, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		return
 	}
 
 	if time.Now().UTC().After(*urepo.EmailVerificationCodeExpiresAt) {
-		return helpers.ExpiredTokenError(e)
+		helpers.ExpiredTokenError(w)
+		return
 	}
 
 	now := time.Now().UTC()
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET email_verification_code = NULL, email_verification_code_expires_at = NULL, email_confirmed_at = ? WHERE did = ?", nil, now, urepo.Repo.Did).Error; err != nil {
 		logger.Error("error updating user", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

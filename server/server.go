@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -23,6 +24,8 @@ import (
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/domodwyer/mailyak/v3"
 	"github.com/glebarez/sqlite"
+	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-playground/validator"
 	"github.com/gorilla/sessions"
 	"github.com/haileyok/cocoon/identity"
@@ -35,11 +38,8 @@ import (
 	"github.com/haileyok/cocoon/oauth/provider"
 	"github.com/haileyok/cocoon/plc"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo-contrib/echoprometheus"
-	echo_session "github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	slogecho "github.com/samber/slog-echo"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"gorm.io/gorm"
 )
 
@@ -76,21 +76,24 @@ type IPFSConfig struct {
 }
 
 type Server struct {
-	http          *http.Client
-	httpd         *http.Server
-	mail          *mailyak.MailYak
-	mailLk        *sync.Mutex
-	echo          *echo.Echo
-	db            *db.DB
-	plcClient     *plc.Client
-	logger        *slog.Logger
-	config        *config
-	privateKey    *ecdsa.PrivateKey
-	repoman       *RepoMan
-	oauthProvider *provider.Provider
-	evtman        *events.EventManager
-	passport      *identity.Passport
-	fallbackProxy string
+	http             *http.Client
+	httpd            *http.Server
+	mail             *mailyak.MailYak
+	mailLk           *sync.Mutex
+	router           *chi.Mux
+	db               *db.DB
+	plcClient        *plc.Client
+	logger           *slog.Logger
+	config           *config
+	privateKey       *ecdsa.PrivateKey
+	repoman          *RepoMan
+	oauthProvider    *provider.Provider
+	evtman           *events.EventManager
+	passport         *identity.Passport
+	fallbackProxy    string
+	sessions         *sessions.CookieStore
+	validator        *validator.Validate
+	templateRenderer *TemplateRenderer
 
 	lastRequestCrawl time.Time
 	requestCrawlMu   sync.Mutex
@@ -190,21 +193,21 @@ func (s *Server) loadTemplates() {
 	absPath, _ := filepath.Abs("server/templates/*.html")
 	if s.config.Version == "dev" {
 		tmpl := template.Must(template.ParseGlob(absPath))
-		s.echo.Renderer = &TemplateRenderer{
+		s.templateRenderer = &TemplateRenderer{
 			templates:    tmpl,
 			isDev:        true,
 			templatePath: absPath,
 		}
 	} else {
 		tmpl := template.Must(template.ParseFS(templateFS, "templates/*.html"))
-		s.echo.Renderer = &TemplateRenderer{
+		s.templateRenderer = &TemplateRenderer{
 			templates: tmpl,
 			isDev:     false,
 		}
 	}
 }
 
-func (t *TemplateRenderer) Render(w io.Writer, name string, data any, c echo.Context) error {
+func (t *TemplateRenderer) Render(w io.Writer, name string, data any) error {
 	if t.isDev {
 		tmpl, err := template.ParseGlob(t.templatePath)
 		if err != nil {
@@ -213,11 +216,23 @@ func (t *TemplateRenderer) Render(w io.Writer, name string, data any, c echo.Con
 		t.templates = tmpl
 	}
 
-	if viewContext, isMap := data.(map[string]any); isMap {
-		viewContext["reverse"] = c.Echo().Reverse
-	}
-
 	return t.templates.ExecuteTemplate(w, name, data)
+}
+
+// renderTemplate is a convenience method on the server that renders a named
+// HTML template to the given ResponseWriter with a 200 status.
+func (s *Server) renderTemplate(w http.ResponseWriter, name string, data any) error {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	return s.templateRenderer.Render(w, name, data)
+}
+
+// writeJSON writes a JSON-encoded value with the given status code.
+func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.logger.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 func New(args *Args) (*Server, error) {
@@ -259,19 +274,17 @@ func New(args *Args) (*Server, error) {
 		panic("SESSION SECRET WAS NOT SET. THIS IS REQUIRED. ")
 	}
 
-	e := echo.New()
+	r := chi.NewRouter()
 
-	e.Pre(middleware.RemoveTrailingSlash())
-	e.Pre(slogecho.New(args.Logger.With("component", "slogecho")))
-	e.Use(echo_session.Middleware(sessions.NewCookieStore([]byte(args.SessionSecret))))
-	e.Use(echoprometheus.NewMiddleware("cocoon"))
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins:     []string{"*"},
-		AllowHeaders:     []string{"*"},
-		AllowMethods:     []string{"*"},
-		AllowCredentials: true,
-		MaxAge:           100_000_000,
-	}))
+	r.Use(chimiddleware.StripSlashes)
+	r.Use(func(next http.Handler) http.Handler {
+		logger := args.Logger.With("component", "http")
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			logger.Info("request", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+		})
+	})
+	r.Use(corsMiddleware)
 
 	vdtor := validator.New()
 	vdtor.RegisterValidation("atproto-handle", func(fl validator.FieldLevel) bool {
@@ -299,11 +312,9 @@ func New(args *Args) (*Server, error) {
 		return true
 	})
 
-	e.Validator = &CustomValidator{validator: vdtor}
-
 	httpd := &http.Server{
 		Addr:    args.Addr,
-		Handler: e,
+		Handler: r,
 		// shitty defaults but okay for now, needed for import repo
 		ReadTimeout:  5 * time.Minute,
 		WriteTimeout: 5 * time.Minute,
@@ -370,14 +381,18 @@ func New(args *Args) (*Server, error) {
 		return nil, fmt.Errorf("failed to create event persister: %w", err)
 	}
 
+	cookieStore := sessions.NewCookieStore([]byte(args.SessionSecret))
+
 	s := &Server{
 		http:       h,
 		httpd:      httpd,
-		echo:       e,
+		router:     r,
 		logger:     args.Logger,
 		db:         dbw,
 		plcClient:  plcClient,
 		privateKey: &pkey,
+		sessions:   cookieStore,
+		validator:  vdtor,
 		config: &config{
 			Version:           args.Version,
 			Did:               args.Did,
@@ -438,105 +453,131 @@ func New(args *Args) (*Server, error) {
 	return s, nil
 }
 
+// corsMiddleware adds permissive CORS headers to every response.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Max-Age", "100000000")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) addRoutes() {
+	r := s.router
+
 	// static
 	if s.config.Version == "dev" {
-		s.echo.Static("/static", "server/static")
+		r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir("server/static"))))
 	} else {
-		s.echo.GET("/static/*", echo.WrapHandler(http.FileServer(http.FS(staticFS))))
+		r.Handle("/static/*", http.FileServer(http.FS(staticFS)))
 	}
 
+	// metrics
+	r.Handle("/metrics", promhttp.Handler())
+
 	// random stuff
-	s.echo.GET("/", s.handleRoot)
-	s.echo.GET("/xrpc/_health", s.handleHealth)
-	s.echo.GET("/.well-known/did.json", s.handleWellKnown)
-	s.echo.GET("/.well-known/atproto-did", s.handleAtprotoDid)
-	s.echo.GET("/.well-known/oauth-protected-resource", s.handleOauthProtectedResource)
-	s.echo.GET("/.well-known/oauth-authorization-server", s.handleOauthAuthorizationServer)
-	s.echo.GET("/robots.txt", s.handleRobots)
+	r.Get("/", s.handleRoot)
+	r.Get("/xrpc/_health", s.handleHealth)
+	r.Get("/.well-known/did.json", s.handleWellKnown)
+	r.Get("/.well-known/atproto-did", s.handleAtprotoDid)
+	r.Get("/.well-known/oauth-protected-resource", s.handleOauthProtectedResource)
+	r.Get("/.well-known/oauth-authorization-server", s.handleOauthAuthorizationServer)
+	r.Get("/robots.txt", s.handleRobots)
 
 	// public
-	s.echo.GET("/xrpc/com.atproto.identity.resolveHandle", s.handleResolveHandle)
-	s.echo.POST("/xrpc/com.atproto.server.createAccount", s.handleCreateAccount)
-	s.echo.POST("/xrpc/com.atproto.server.createSession", s.handleCreateSession)
-	s.echo.GET("/xrpc/com.atproto.server.describeServer", s.handleDescribeServer)
-	s.echo.POST("/xrpc/com.atproto.server.reserveSigningKey", s.handleServerReserveSigningKey)
+	r.Get("/xrpc/com.atproto.identity.resolveHandle", s.handleResolveHandle)
+	r.Post("/xrpc/com.atproto.server.createAccount", s.handleCreateAccount)
+	r.Post("/xrpc/com.atproto.server.createSession", s.handleCreateSession)
+	r.Get("/xrpc/com.atproto.server.describeServer", s.handleDescribeServer)
+	r.Post("/xrpc/com.atproto.server.reserveSigningKey", s.handleServerReserveSigningKey)
 
-	s.echo.GET("/xrpc/com.atproto.repo.describeRepo", s.handleDescribeRepo)
-	s.echo.GET("/xrpc/com.atproto.sync.listRepos", s.handleListRepos)
-	s.echo.GET("/xrpc/com.atproto.repo.listRecords", s.handleListRecords)
-	s.echo.GET("/xrpc/com.atproto.repo.getRecord", s.handleRepoGetRecord)
-	s.echo.GET("/xrpc/com.atproto.sync.getRecord", s.handleSyncGetRecord)
-	s.echo.GET("/xrpc/com.atproto.sync.getBlocks", s.handleGetBlocks)
-	s.echo.GET("/xrpc/com.atproto.sync.getLatestCommit", s.handleSyncGetLatestCommit)
-	s.echo.GET("/xrpc/com.atproto.sync.getRepoStatus", s.handleSyncGetRepoStatus)
-	s.echo.GET("/xrpc/com.atproto.sync.getRepo", s.handleSyncGetRepo)
-	s.echo.GET("/xrpc/com.atproto.sync.subscribeRepos", s.handleSyncSubscribeRepos)
-	s.echo.GET("/xrpc/com.atproto.sync.listBlobs", s.handleSyncListBlobs)
-	s.echo.GET("/xrpc/com.atproto.sync.getBlob", s.handleSyncGetBlob)
+	r.Get("/xrpc/com.atproto.repo.describeRepo", s.handleDescribeRepo)
+	r.Get("/xrpc/com.atproto.sync.listRepos", s.handleListRepos)
+	r.Get("/xrpc/com.atproto.repo.listRecords", s.handleListRecords)
+	r.Get("/xrpc/com.atproto.repo.getRecord", s.handleRepoGetRecord)
+	r.Get("/xrpc/com.atproto.sync.getRecord", s.handleSyncGetRecord)
+	r.Get("/xrpc/com.atproto.sync.getBlocks", s.handleGetBlocks)
+	r.Get("/xrpc/com.atproto.sync.getLatestCommit", s.handleSyncGetLatestCommit)
+	r.Get("/xrpc/com.atproto.sync.getRepoStatus", s.handleSyncGetRepoStatus)
+	r.Get("/xrpc/com.atproto.sync.getRepo", s.handleSyncGetRepo)
+	r.Get("/xrpc/com.atproto.sync.subscribeRepos", s.handleSyncSubscribeRepos)
+	r.Get("/xrpc/com.atproto.sync.listBlobs", s.handleSyncListBlobs)
+	r.Get("/xrpc/com.atproto.sync.getBlob", s.handleSyncGetBlob)
 
 	// labels
-	s.echo.GET("/xrpc/com.atproto.label.queryLabels", s.handleLabelQueryLabels)
+	r.Get("/xrpc/com.atproto.label.queryLabels", s.handleLabelQueryLabels)
 
 	// account
-	s.echo.GET("/account", s.handleAccount)
-	s.echo.POST("/account/revoke", s.handleAccountRevoke)
-	s.echo.GET("/account/signin", s.handleAccountSigninGet)
-	s.echo.POST("/account/signin", s.handleAccountSigninPost)
-	s.echo.GET("/account/signout", s.handleAccountSignout)
+	r.Get("/account", s.handleAccount)
+	r.Post("/account/revoke", s.handleAccountRevoke)
+	r.Get("/account/signin", s.handleAccountSigninGet)
+	r.Post("/account/signin", s.handleAccountSigninPost)
+	r.Get("/account/signout", s.handleAccountSignout)
 
 	// oauth account
-	s.echo.GET("/oauth/jwks", s.handleOauthJwks)
-	s.echo.GET("/oauth/authorize", s.handleOauthAuthorizeGet)
-	s.echo.POST("/oauth/authorize", s.handleOauthAuthorizePost)
+	r.Get("/oauth/jwks", s.handleOauthJwks)
+	r.Get("/oauth/authorize", s.handleOauthAuthorizeGet)
+	r.Post("/oauth/authorize", s.handleOauthAuthorizePost)
 
-	// oauth authorization
-	s.echo.POST("/oauth/par", s.handleOauthPar, s.oauthProvider.BaseMiddleware)
-	s.echo.POST("/oauth/token", s.handleOauthToken, s.oauthProvider.BaseMiddleware)
+	// oauth authorization (with BaseMiddleware)
+	r.With(s.oauthProvider.BaseMiddleware).Post("/oauth/par", s.handleOauthPar)
+	r.With(s.oauthProvider.BaseMiddleware).Post("/oauth/token", s.handleOauthToken)
 
 	// authed
-	s.echo.GET("/xrpc/com.atproto.server.getSession", s.handleGetSession, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.refreshSession", s.handleRefreshSession, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.deleteSession", s.handleDeleteSession, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.GET("/xrpc/com.atproto.identity.getRecommendedDidCredentials", s.handleGetRecommendedDidCredentials, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.identity.updateHandle", s.handleIdentityUpdateHandle, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.identity.requestPlcOperationSignature", s.handleIdentityRequestPlcOperationSignature, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.identity.signPlcOperation", s.handleSignPlcOperation, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.identity.submitPlcOperation", s.handleSubmitPlcOperation, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.confirmEmail", s.handleServerConfirmEmail, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.requestEmailConfirmation", s.handleServerRequestEmailConfirmation, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.requestPasswordReset", s.handleServerRequestPasswordReset) // AUTH NOT REQUIRED FOR THIS ONE
-	s.echo.POST("/xrpc/com.atproto.server.requestEmailUpdate", s.handleServerRequestEmailUpdate, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.resetPassword", s.handleServerResetPassword, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.updateEmail", s.handleServerUpdateEmail, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.GET("/xrpc/com.atproto.server.getServiceAuth", s.handleServerGetServiceAuth, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.GET("/xrpc/com.atproto.server.checkAccountStatus", s.handleServerCheckAccountStatus, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.deactivateAccount", s.handleServerDeactivateAccount, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.activateAccount", s.handleServerActivateAccount, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.requestAccountDelete", s.handleServerRequestAccountDelete, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.deleteAccount", s.handleServerDeleteAccount)
+	authed := func(h http.HandlerFunc) http.Handler {
+		return s.handleLegacySessionMiddleware(s.handleOauthSessionMiddleware(h))
+	}
+
+	r.Get("/xrpc/com.atproto.server.getSession", authed(s.handleGetSession).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.refreshSession", authed(s.handleRefreshSession).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.deleteSession", authed(s.handleDeleteSession).ServeHTTP)
+	r.Get("/xrpc/com.atproto.identity.getRecommendedDidCredentials", authed(s.handleGetRecommendedDidCredentials).ServeHTTP)
+	r.Post("/xrpc/com.atproto.identity.updateHandle", authed(s.handleIdentityUpdateHandle).ServeHTTP)
+	r.Post("/xrpc/com.atproto.identity.requestPlcOperationSignature", authed(s.handleIdentityRequestPlcOperationSignature).ServeHTTP)
+	r.Post("/xrpc/com.atproto.identity.signPlcOperation", authed(s.handleSignPlcOperation).ServeHTTP)
+	r.Post("/xrpc/com.atproto.identity.submitPlcOperation", authed(s.handleSubmitPlcOperation).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.confirmEmail", authed(s.handleServerConfirmEmail).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.requestEmailConfirmation", authed(s.handleServerRequestEmailConfirmation).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.requestPasswordReset", s.handleServerRequestPasswordReset) // AUTH NOT REQUIRED FOR THIS ONE
+	r.Post("/xrpc/com.atproto.server.requestEmailUpdate", authed(s.handleServerRequestEmailUpdate).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.resetPassword", authed(s.handleServerResetPassword).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.updateEmail", authed(s.handleServerUpdateEmail).ServeHTTP)
+	r.Get("/xrpc/com.atproto.server.getServiceAuth", authed(s.handleServerGetServiceAuth).ServeHTTP)
+	r.Get("/xrpc/com.atproto.server.checkAccountStatus", authed(s.handleServerCheckAccountStatus).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.deactivateAccount", authed(s.handleServerDeactivateAccount).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.activateAccount", authed(s.handleServerActivateAccount).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.requestAccountDelete", authed(s.handleServerRequestAccountDelete).ServeHTTP)
+	r.Post("/xrpc/com.atproto.server.deleteAccount", s.handleServerDeleteAccount)
 
 	// repo
-	s.echo.GET("/xrpc/com.atproto.repo.listMissingBlobs", s.handleListMissingBlobs, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.createRecord", s.handleCreateRecord, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.putRecord", s.handlePutRecord, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.deleteRecord", s.handleDeleteRecord, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.applyWrites", s.handleApplyWrites, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.uploadBlob", s.handleRepoUploadBlob, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/com.atproto.repo.importRepo", s.handleRepoImportRepo, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
+	r.Get("/xrpc/com.atproto.repo.listMissingBlobs", authed(s.handleListMissingBlobs).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.createRecord", authed(s.handleCreateRecord).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.putRecord", authed(s.handlePutRecord).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.deleteRecord", authed(s.handleDeleteRecord).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.applyWrites", authed(s.handleApplyWrites).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.uploadBlob", authed(s.handleRepoUploadBlob).ServeHTTP)
+	r.Post("/xrpc/com.atproto.repo.importRepo", authed(s.handleRepoImportRepo).ServeHTTP)
 
 	// stupid silly endpoints
-	s.echo.GET("/xrpc/app.bsky.actor.getPreferences", s.handleActorGetPreferences, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/app.bsky.actor.putPreferences", s.handleActorPutPreferences, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.GET("/xrpc/app.bsky.feed.getFeed", s.handleProxyBskyFeedGetFeed, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.GET("/xrpc/app.bsky.ageassurance.getState", s.handleAgeAssurance, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	// admin routes
-	s.echo.POST("/xrpc/com.atproto.server.createInviteCode", s.handleCreateInviteCode, s.handleAdminMiddleware)
-	s.echo.POST("/xrpc/com.atproto.server.createInviteCodes", s.handleCreateInviteCodes, s.handleAdminMiddleware)
+	r.Get("/xrpc/app.bsky.actor.getPreferences", authed(s.handleActorGetPreferences).ServeHTTP)
+	r.Post("/xrpc/app.bsky.actor.putPreferences", authed(s.handleActorPutPreferences).ServeHTTP)
+	r.Get("/xrpc/app.bsky.feed.getFeed", authed(s.handleProxyBskyFeedGetFeed).ServeHTTP)
+	r.Get("/xrpc/app.bsky.ageassurance.getState", authed(s.handleAgeAssurance).ServeHTTP)
 
-	// are there any routes that we should be allowing without auth? i dont think so but idk
-	s.echo.GET("/xrpc/*", s.handleProxy, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
-	s.echo.POST("/xrpc/*", s.handleProxy, s.handleLegacySessionMiddleware, s.handleOauthSessionMiddleware)
+	// admin routes
+	r.With(s.handleAdminMiddleware).Post("/xrpc/com.atproto.server.createInviteCode", s.handleCreateInviteCode)
+	r.With(s.handleAdminMiddleware).Post("/xrpc/com.atproto.server.createInviteCodes", s.handleCreateInviteCodes)
+
+	// catch-all proxy (authed)
+	r.Get("/xrpc/*", authed(s.handleProxy).ServeHTTP)
+	r.Post("/xrpc/*", authed(s.handleProxy).ServeHTTP)
 }
 
 func (s *Server) Serve(ctx context.Context) error {

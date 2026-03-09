@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 	"github.com/haileyok/cocoon/oauth/constants"
 	"github.com/haileyok/cocoon/oauth/dpop"
 	"github.com/haileyok/cocoon/oauth/provider"
-	"github.com/labstack/echo/v4"
 )
 
 type OauthTokenRequest struct {
@@ -37,84 +37,123 @@ type OauthTokenResponse struct {
 	Sub          string `json:"sub"`
 }
 
-func (s *Server) handleOauthToken(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleOauthToken")
 
-	var req OauthTokenRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding token request", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := r.ParseForm(); err != nil {
+		logger.Error("error parsing token request form", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	proof, err := s.oauthProvider.DpopManager.CheckProof(e.Request().Method, e.Request().URL.String(), e.Request().Header, nil)
+	req := OauthTokenRequest{
+		GrantType: r.FormValue("grant_type"),
+	}
+	if v := r.FormValue("code"); v != "" {
+		req.Code = to.StringPtr(v)
+	}
+	if v := r.FormValue("code_verifier"); v != "" {
+		req.CodeVerifier = to.StringPtr(v)
+	}
+	if v := r.FormValue("redirect_uri"); v != "" {
+		req.RedirectURI = to.StringPtr(v)
+	}
+	if v := r.FormValue("refresh_token"); v != "" {
+		req.RefreshToken = to.StringPtr(v)
+	}
+	if v := r.FormValue("client_assertion_type"); v != "" {
+		req.ClientAssertionType = to.StringPtr(v)
+	}
+	if v := r.FormValue("client_assertion"); v != "" {
+		req.ClientAssertion = to.StringPtr(v)
+	}
+	req.AuthenticateClientRequestBase = provider.AuthenticateClientRequestBase{
+		ClientID:            r.FormValue("client_id"),
+		ClientAssertionType: req.ClientAssertionType,
+		ClientAssertion:     req.ClientAssertion,
+	}
+
+	proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, r.URL.String(), r.Header, nil)
 	if err != nil {
 		if errors.Is(err, dpop.ErrUseDpopNonce) {
 			nonce := s.oauthProvider.NextNonce()
 			if nonce != "" {
-				e.Response().Header().Set("DPoP-Nonce", nonce)
-				e.Response().Header().Add("access-control-expose-headers", "DPoP-Nonce")
+				w.Header().Set("DPoP-Nonce", nonce)
+				w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 			}
-			return e.JSON(400, map[string]string{
+			s.writeJSON(w, 400, map[string]string{
 				"error": "use_dpop_nonce",
 			})
+			return
 		}
 		logger.Error("error getting dpop proof", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
-	client, clientAuth, err := s.oauthProvider.AuthenticateClient(e.Request().Context(), req.AuthenticateClientRequestBase, proof, &provider.AuthenticateClientOptions{
+	client, clientAuth, err := s.oauthProvider.AuthenticateClient(ctx, req.AuthenticateClientRequestBase, proof, &provider.AuthenticateClientOptions{
 		AllowMissingDpopProof: true,
 	})
 	if err != nil {
 		logger.Error("error authenticating client", "client_id", req.ClientID, "error", err)
-		return helpers.InputError(e, to.StringPtr(err.Error()))
+		helpers.InputError(w, to.StringPtr(err.Error()))
+		return
 	}
 
-	// TODO: this should come from an oauth provier config
+	// TODO: this should come from an oauth provider config
 	if !slices.Contains([]string{"authorization_code", "refresh_token"}, req.GrantType) {
-		return helpers.InputError(e, to.StringPtr(fmt.Sprintf(`"%s" grant type is not supported by the server`, req.GrantType)))
+		helpers.InputError(w, to.StringPtr(fmt.Sprintf(`"%s" grant type is not supported by the server`, req.GrantType)))
+		return
 	}
 
 	if !slices.Contains(client.Metadata.GrantTypes, req.GrantType) {
-		return helpers.InputError(e, to.StringPtr(fmt.Sprintf(`"%s" grant type is not supported by the client`, req.GrantType)))
+		helpers.InputError(w, to.StringPtr(fmt.Sprintf(`"%s" grant type is not supported by the client`, req.GrantType)))
+		return
 	}
 
 	if req.GrantType == "authorization_code" {
 		if req.Code == nil {
-			return helpers.InputError(e, to.StringPtr(`"code" is required"`))
+			helpers.InputError(w, to.StringPtr(`"code" is required"`))
+			return
 		}
 
 		var authReq provider.OauthAuthorizationRequest
 		// get the lil guy and delete him
 		if err := s.db.Raw(ctx, "DELETE FROM oauth_authorization_requests WHERE code = ? RETURNING *", nil, *req.Code).Scan(&authReq).Error; err != nil {
 			logger.Error("error finding authorization request", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if req.RedirectURI == nil || *req.RedirectURI != authReq.Parameters.RedirectURI {
-			return helpers.InputError(e, to.StringPtr(`"redirect_uri" mismatch`))
+			helpers.InputError(w, to.StringPtr(`"redirect_uri" mismatch`))
+			return
 		}
 
 		if authReq.Parameters.CodeChallenge != nil {
 			if req.CodeVerifier == nil {
-				return helpers.InputError(e, to.StringPtr(`"code_verifier" is required`))
+				helpers.InputError(w, to.StringPtr(`"code_verifier" is required`))
+				return
 			}
 
 			if len(*req.CodeVerifier) < 43 {
-				return helpers.InputError(e, to.StringPtr(`"code_verifier" is too short`))
+				helpers.InputError(w, to.StringPtr(`"code_verifier" is too short`))
+				return
 			}
 
-			switch *&authReq.Parameters.CodeChallengeMethod {
+			switch authReq.Parameters.CodeChallengeMethod {
 			case "", "plain":
 				if authReq.Parameters.CodeChallenge != req.CodeVerifier {
-					return helpers.InputError(e, to.StringPtr("invalid code_verifier"))
+					helpers.InputError(w, to.StringPtr("invalid code_verifier"))
+					return
 				}
 			case "S256":
 				inputChal, err := base64.RawURLEncoding.DecodeString(*authReq.Parameters.CodeChallenge)
 				if err != nil {
 					logger.Error("error decoding code challenge", "error", err)
-					return helpers.ServerError(e, nil)
+					helpers.ServerError(w, nil)
+					return
 				}
 
 				h := sha256.New()
@@ -122,18 +161,22 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 				compdChal := h.Sum(nil)
 
 				if !bytes.Equal(inputChal, compdChal) {
-					return helpers.InputError(e, to.StringPtr("invalid code_verifier"))
+					helpers.InputError(w, to.StringPtr("invalid code_verifier"))
+					return
 				}
 			default:
-				return helpers.InputError(e, to.StringPtr("unsupported code_challenge_method "+*&authReq.Parameters.CodeChallengeMethod))
+				helpers.InputError(w, to.StringPtr("unsupported code_challenge_method "+authReq.Parameters.CodeChallengeMethod))
+				return
 			}
 		} else if req.CodeVerifier != nil {
-			return helpers.InputError(e, to.StringPtr("code_challenge parameter wasn't provided"))
+			helpers.InputError(w, to.StringPtr("code_challenge parameter wasn't provided"))
+			return
 		}
 
 		repo, err := s.getRepoActorByDid(ctx, *authReq.Sub)
 		if err != nil {
-			helpers.InputError(e, to.StringPtr("unable to find actor"))
+			helpers.InputError(w, to.StringPtr("unable to find actor"))
+			return
 		}
 
 		now := time.Now()
@@ -159,7 +202,8 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 		accessToken := jwt.NewWithClaims(jwt.SigningMethodES256, accessClaims)
 		accessString, err := accessToken.SignedString(s.privateKey)
 		if err != nil {
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if err := s.db.Create(ctx, &provider.OauthToken{
@@ -175,7 +219,8 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 			Ip:           authReq.Ip,
 		}, nil).Error; err != nil {
 			logger.Error("error creating token in db", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		// prob not needed
@@ -184,9 +229,7 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 			tokenType = "DPoP"
 		}
 
-		e.Response().Header().Set("content-type", "application/json")
-
-		return e.JSON(200, OauthTokenResponse{
+		s.writeJSON(w, 200, OauthTokenResponse{
 			AccessToken:  accessString,
 			RefreshToken: refreshToken,
 			TokenType:    tokenType,
@@ -194,44 +237,53 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 			ExpiresIn:    int64(eat.Sub(time.Now()).Seconds()),
 			Sub:          repo.Repo.Did,
 		})
+		return
 	}
 
 	if req.GrantType == "refresh_token" {
 		if req.RefreshToken == nil {
-			return helpers.InputError(e, to.StringPtr(`"refresh_token" is required`))
+			helpers.InputError(w, to.StringPtr(`"refresh_token" is required`))
+			return
 		}
 
 		var oauthToken provider.OauthToken
 		if err := s.db.Raw(ctx, "SELECT * FROM oauth_tokens WHERE refresh_token = ?", nil, req.RefreshToken).Scan(&oauthToken).Error; err != nil {
 			logger.Error("error finding oauth token by refresh token", "error", err, "refresh_token", req.RefreshToken)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if client.Metadata.ClientID != oauthToken.ClientId {
-			return helpers.InputError(e, to.StringPtr(`"client_id" mismatch`))
+			helpers.InputError(w, to.StringPtr(`"client_id" mismatch`))
+			return
 		}
 
 		if clientAuth.Method != oauthToken.ClientAuth.Method {
-			return helpers.InputError(e, to.StringPtr(`"client authentication method mismatch`))
+			helpers.InputError(w, to.StringPtr(`"client authentication method mismatch`))
+			return
 		}
 
 		if *oauthToken.Parameters.DpopJkt != proof.JKT {
-			return helpers.InputError(e, to.StringPtr("dpop proof does not match expected jkt"))
+			helpers.InputError(w, to.StringPtr("dpop proof does not match expected jkt"))
+			return
 		}
 
 		ageRes := oauth.GetSessionAgeFromToken(oauthToken)
 
 		if ageRes.SessionExpired {
-			return helpers.InputError(e, to.StringPtr("Session expired"))
+			helpers.InputError(w, to.StringPtr("Session expired"))
+			return
 		}
 
 		if ageRes.RefreshExpired {
-			return helpers.InputError(e, to.StringPtr("Refresh token expired"))
+			helpers.InputError(w, to.StringPtr("Refresh token expired"))
+			return
 		}
 
 		if client.Metadata.DpopBoundAccessTokens && oauthToken.Parameters.DpopJkt == nil {
 			// why? ref impl
-			return helpers.InputError(e, to.StringPtr("dpop jkt is required for dpop bound access tokens"))
+			helpers.InputError(w, to.StringPtr("dpop jkt is required for dpop bound access tokens"))
+			return
 		}
 
 		nextTokenId := oauth.GenerateTokenId()
@@ -251,18 +303,20 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 		}
 
 		if oauthToken.Parameters.DpopJkt != nil {
-			accessClaims["cnf"] = *&oauthToken.Parameters.DpopJkt
+			accessClaims["cnf"] = oauthToken.Parameters.DpopJkt
 		}
 
 		accessToken := jwt.NewWithClaims(jwt.SigningMethodES256, accessClaims)
 		accessString, err := accessToken.SignedString(s.privateKey)
 		if err != nil {
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if err := s.db.Exec(ctx, "UPDATE oauth_tokens SET token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE refresh_token = ?", nil, accessString, nextRefreshToken, eat, now, *req.RefreshToken).Error; err != nil {
 			logger.Error("error updating token", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		// prob not needed
@@ -271,7 +325,7 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 			tokenType = "DPoP"
 		}
 
-		return e.JSON(200, OauthTokenResponse{
+		s.writeJSON(w, 200, OauthTokenResponse{
 			AccessToken:  accessString,
 			RefreshToken: nextRefreshToken,
 			TokenType:    tokenType,
@@ -279,7 +333,8 @@ func (s *Server) handleOauthToken(e echo.Context) error {
 			ExpiresIn:    int64(eat.Sub(time.Now()).Seconds()),
 			Sub:          oauthToken.Sub,
 		})
+		return
 	}
 
-	return helpers.InputError(e, to.StringPtr(fmt.Sprintf(`grant type "%s" is not supported`, req.GrantType)))
+	helpers.InputError(w, to.StringPtr(fmt.Sprintf(`grant type "%s" is not supported`, req.GrantType)))
 }

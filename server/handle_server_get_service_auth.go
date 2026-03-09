@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -13,28 +14,32 @@ import (
 	"github.com/google/uuid"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 )
 
 type ServerGetServiceAuthRequest struct {
-	Aud string `query:"aud" validate:"required,atproto-did"`
-	// exp should be a float, as some clients will send a non-integer expiration
+	Aud string  `query:"aud" validate:"required,atproto-did"`
 	Exp float64 `query:"exp"`
 	Lxm string  `query:"lxm"`
 }
 
-func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
+func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleServerGetServiceAuth")
 
-	var req ServerGetServiceAuthRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("could not bind service auth request", "error", err)
-		return helpers.ServerError(e, nil)
+	req := ServerGetServiceAuthRequest{
+		Aud: r.URL.Query().Get("aud"),
+		Lxm: r.URL.Query().Get("lxm"),
+	}
+	if v := r.URL.Query().Get("exp"); v != "" {
+		var exp float64
+		if _, err := fmt.Sscanf(v, "%f", &exp); err == nil {
+			req.Exp = exp
+		}
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
 	exp := int64(req.Exp)
@@ -44,7 +49,8 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 	}
 
 	if req.Lxm == "com.atproto.server.getServiceAuth" {
-		return helpers.InputError(e, to.StringPtr("may not generate auth tokens recursively"))
+		helpers.InputError(w, to.StringPtr("may not generate auth tokens recursively"))
+		return
 	}
 
 	var maxExp int64
@@ -54,10 +60,11 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 		maxExp = now + 60
 	}
 	if exp > maxExp {
-		return helpers.InputError(e, to.StringPtr("expiration too big. smoller please"))
+		helpers.InputError(w, to.StringPtr("expiration too big. smoller please"))
+		return
 	}
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	header := map[string]string{
 		"alg": "ES256K",
@@ -67,7 +74,8 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 	hj, err := json.Marshal(header)
 	if err != nil {
 		logger.Error("error marshaling header", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	encheader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
@@ -84,8 +92,9 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 	}
 	pj, err := json.Marshal(payload)
 	if err != nil {
-		logger.Error("error marashaling payload", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error marshaling payload", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
@@ -96,13 +105,15 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 	sk, err := secp256k1secec.NewPrivateKey(repo.SigningKey)
 	if err != nil {
 		logger.Error("can't load private key", "error", err)
-		return err
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	R, S, _, err := sk.SignRaw(rand.Reader, hash[:])
 	if err != nil {
 		logger.Error("error signing", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	rBytes := R.Bytes()
@@ -117,7 +128,7 @@ func (s *Server) handleServerGetServiceAuth(e echo.Context) error {
 	encsig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(rawsig), "=")
 	token := fmt.Sprintf("%s.%s", input, encsig)
 
-	return e.JSON(200, map[string]string{
+	s.writeJSON(w, 200, map[string]string{
 		"token": token,
 	})
 }

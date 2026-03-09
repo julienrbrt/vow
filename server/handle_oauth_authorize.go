@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -11,50 +12,65 @@ import (
 	"github.com/haileyok/cocoon/oauth"
 	"github.com/haileyok/cocoon/oauth/constants"
 	"github.com/haileyok/cocoon/oauth/provider"
-	"github.com/labstack/echo/v4"
 )
 
 type HandleOauthAuthorizeGetInput struct {
 	RequestUri string `query:"request_uri"`
 }
 
-func (s *Server) handleOauthAuthorizeGet(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
 	logger := s.logger.With("name", "handleOauthAuthorizeGet")
 
-	var input HandleOauthAuthorizeGetInput
-	if err := e.Bind(&input); err != nil {
-		logger.Error("error binding request", "err", err)
-		return fmt.Errorf("error binding request")
-	}
+	requestUri := r.URL.Query().Get("request_uri")
 
 	var reqId string
-	if input.RequestUri != "" {
-		id, err := oauth.DecodeRequestUri(input.RequestUri)
+	if requestUri != "" {
+		id, err := oauth.DecodeRequestUri(requestUri)
 		if err != nil {
-			logger.Error("no request uri found in input", "url", e.Request().URL.String())
-			return helpers.InputError(e, to.StringPtr("no request uri"))
+			logger.Error("no request uri found in input", "url", r.URL.String())
+			helpers.InputError(w, to.StringPtr("no request uri"))
+			return
 		}
 		reqId = id
 	} else {
-		var parRequest provider.ParRequest
-		if err := e.Bind(&parRequest); err != nil {
-			s.logger.Error("error binding for standard auth request", "error", err)
-			return helpers.InputError(e, to.StringPtr("InvalidRequest"))
+		parRequest := provider.ParRequest{
+			AuthenticateClientRequestBase: provider.AuthenticateClientRequestBase{
+				ClientID: r.URL.Query().Get("client_id"),
+			},
+			ResponseType:        r.URL.Query().Get("response_type"),
+			State:               r.URL.Query().Get("state"),
+			RedirectURI:         r.URL.Query().Get("redirect_uri"),
+			Scope:               r.URL.Query().Get("scope"),
+			CodeChallengeMethod: r.URL.Query().Get("code_challenge_method"),
+		}
+		if v := r.URL.Query().Get("code_challenge"); v != "" {
+			parRequest.CodeChallenge = to.StringPtr(v)
+		}
+		if v := r.URL.Query().Get("login_hint"); v != "" {
+			parRequest.LoginHint = to.StringPtr(v)
+		}
+		if v := r.URL.Query().Get("dpop_jkt"); v != "" {
+			parRequest.DpopJkt = to.StringPtr(v)
+		}
+		if v := r.URL.Query().Get("response_mode"); v != "" {
+			parRequest.ResponseMode = to.StringPtr(v)
 		}
 
-		if err := e.Validate(parRequest); err != nil {
+		if err := s.validator.Struct(parRequest); err != nil {
 			// render page for logged out dev
 			if s.config.Version == "dev" && parRequest.ClientID == "" {
-				return e.Render(200, "authorize.html", map[string]any{
+				s.renderTemplate(w, "authorize.html", map[string]any{
 					"Scopes":     []string{"atproto", "transition:generic"},
 					"AppName":    "DEV MODE AUTHORIZATION PAGE",
 					"Handle":     "paula.cocoon.social",
 					"RequestUri": "",
 				})
+				return
 			}
-			return helpers.InputError(e, to.StringPtr("no request uri and invalid parameters"))
+			helpers.InputError(w, to.StringPtr("no request uri and invalid parameters"))
+			return
 		}
 
 		client, clientAuth, err := s.oauthProvider.AuthenticateClient(ctx, parRequest.AuthenticateClientRequestBase, nil, &provider.AuthenticateClientOptions{
@@ -62,16 +78,19 @@ func (s *Server) handleOauthAuthorizeGet(e echo.Context) error {
 		})
 		if err != nil {
 			s.logger.Error("error authenticating client in standard request", "client_id", parRequest.ClientID, "error", err)
-			return helpers.ServerError(e, to.StringPtr(err.Error()))
+			helpers.ServerError(w, to.StringPtr(err.Error()))
+			return
 		}
 
 		if parRequest.DpopJkt == nil {
 			if client.Metadata.DpopBoundAccessTokens {
+				// nothing to do
 			}
 		} else {
 			if !client.Metadata.DpopBoundAccessTokens {
 				msg := "dpop bound access tokens are not enabled for this client"
-				return helpers.InputError(e, &msg)
+				helpers.InputError(w, &msg)
+				return
 			}
 		}
 
@@ -88,32 +107,36 @@ func (s *Server) handleOauthAuthorizeGet(e echo.Context) error {
 
 		if err := s.db.Create(ctx, authRequest, nil).Error; err != nil {
 			s.logger.Error("error creating auth request in db", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		input.RequestUri = oauth.EncodeRequestUri(id)
+		requestUri = oauth.EncodeRequestUri(id)
 		reqId = id
-
 	}
 
-	repo, _, err := s.getSessionRepoOrErr(e)
+	repo, _, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		return e.Redirect(303, "/account/signin?"+e.QueryParams().Encode())
+		http.Redirect(w, r, "/account/signin?"+r.URL.Query().Encode(), 303)
+		return
 	}
 
 	var req provider.OauthAuthorizationRequest
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_authorization_requests WHERE request_id = ?", nil, reqId).Scan(&req).Error; err != nil {
-		return helpers.ServerError(e, to.StringPtr(err.Error()))
+		helpers.ServerError(w, to.StringPtr(err.Error()))
+		return
 	}
 
-	clientId := e.QueryParam("client_id")
+	clientId := r.URL.Query().Get("client_id")
 	if clientId != req.ClientId {
-		return helpers.InputError(e, to.StringPtr("client id does not match the client id for the supplied request"))
+		helpers.InputError(w, to.StringPtr("client id does not match the client id for the supplied request"))
+		return
 	}
 
-	client, err := s.oauthProvider.ClientManager.GetClient(e.Request().Context(), req.ClientId)
+	client, err := s.oauthProvider.ClientManager.GetClient(r.Context(), req.ClientId)
 	if err != nil {
-		return helpers.ServerError(e, to.StringPtr(err.Error()))
+		helpers.ServerError(w, to.StringPtr(err.Error()))
+		return
 	}
 
 	scopes := strings.Split(req.Parameters.Scope, " ")
@@ -122,12 +145,12 @@ func (s *Server) handleOauthAuthorizeGet(e echo.Context) error {
 	data := map[string]any{
 		"Scopes":      scopes,
 		"AppName":     appName,
-		"RequestUri":  input.RequestUri,
-		"QueryParams": e.QueryParams().Encode(),
+		"RequestUri":  requestUri,
+		"QueryParams": r.URL.Query().Encode(),
 		"Handle":      repo.Actor.Handle,
 	}
 
-	return e.Render(200, "authorize.html", data)
+	s.renderTemplate(w, "authorize.html", data)
 }
 
 type OauthAuthorizePostRequest struct {
@@ -135,54 +158,73 @@ type OauthAuthorizePostRequest struct {
 	AcceptOrRejct string `form:"accept_or_reject"`
 }
 
-func (s *Server) handleOauthAuthorizePost(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleOauthAuthorizePost")
 
-	repo, _, err := s.getSessionRepoOrErr(e)
+	repo, _, err := s.getSessionRepoOrErr(r)
 	if err != nil {
-		return e.Redirect(303, "/account/signin")
+		http.Redirect(w, r, "/account/signin", 303)
+		return
 	}
 
-	var req OauthAuthorizePostRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding authorize post request", "error", err)
-		return helpers.InputError(e, nil)
+	if err := r.ParseForm(); err != nil {
+		logger.Error("error parsing authorize post form", "error", err)
+		helpers.InputError(w, nil)
+		return
+	}
+
+	req := OauthAuthorizePostRequest{
+		RequestUri:    r.FormValue("request_uri"),
+		AcceptOrRejct: r.FormValue("accept_or_reject"),
 	}
 
 	reqId, err := oauth.DecodeRequestUri(req.RequestUri)
 	if err != nil {
-		return helpers.InputError(e, to.StringPtr(err.Error()))
+		helpers.InputError(w, to.StringPtr(err.Error()))
+		return
 	}
 
 	var authReq provider.OauthAuthorizationRequest
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_authorization_requests WHERE request_id = ?", nil, reqId).Scan(&authReq).Error; err != nil {
-		return helpers.ServerError(e, to.StringPtr(err.Error()))
+		helpers.ServerError(w, to.StringPtr(err.Error()))
+		return
 	}
 
-	client, err := s.oauthProvider.ClientManager.GetClient(e.Request().Context(), authReq.ClientId)
+	client, err := s.oauthProvider.ClientManager.GetClient(r.Context(), authReq.ClientId)
 	if err != nil {
-		return helpers.ServerError(e, to.StringPtr(err.Error()))
+		helpers.ServerError(w, to.StringPtr(err.Error()))
+		return
 	}
 
 	// TODO: figure out how im supposed to actually redirect
 	if req.AcceptOrRejct == "reject" {
-		return e.Redirect(303, client.Metadata.ClientURI)
+		http.Redirect(w, r, client.Metadata.ClientURI, 303)
+		return
 	}
 
 	if time.Now().After(authReq.ExpiresAt) {
-		return helpers.InputError(e, to.StringPtr("the request has expired"))
+		helpers.InputError(w, to.StringPtr("the request has expired"))
+		return
 	}
 
 	if authReq.Sub != nil || authReq.Code != nil {
-		return helpers.InputError(e, to.StringPtr("this request was already authorized"))
+		helpers.InputError(w, to.StringPtr("this request was already authorized"))
+		return
 	}
 
 	code := oauth.GenerateCode()
 
-	if err := s.db.Exec(ctx, "UPDATE oauth_authorization_requests SET sub = ?, code = ?, accepted = ?, ip = ? WHERE request_id = ?", nil, repo.Repo.Did, code, true, e.RealIP(), reqId).Error; err != nil {
+	// Use the first non-loopback remote address as the IP
+	ip := r.RemoteAddr
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		ip = strings.Split(forwarded, ",")[0]
+	}
+
+	if err := s.db.Exec(ctx, "UPDATE oauth_authorization_requests SET sub = ?, code = ?, accepted = ?, ip = ? WHERE request_id = ?", nil, repo.Repo.Did, code, true, ip, reqId).Error; err != nil {
 		logger.Error("error updating authorization request", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	q := url.Values{}
@@ -197,7 +239,6 @@ func (s *Server) handleOauthAuthorizePost(e echo.Context) error {
 			hashOrQuestion = "#"
 		case "query":
 			// do nothing
-			break
 		default:
 			if authReq.Parameters.ResponseType != "code" {
 				hashOrQuestion = "#"
@@ -209,5 +250,6 @@ func (s *Server) handleOauthAuthorizePost(e echo.Context) error {
 		}
 	}
 
-	return e.Redirect(303, authReq.Parameters.RedirectURI+hashOrQuestion+q.Encode())
+	_ = fmt.Sprintf // avoid unused import if fmt ends up unused
+	http.Redirect(w, r, authReq.Parameters.RedirectURI+hashOrQuestion+q.Encode(), 303)
 }

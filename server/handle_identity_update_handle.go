@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -14,37 +16,39 @@ import (
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/haileyok/cocoon/plc"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoIdentityUpdateHandleRequest struct {
 	Handle string `json:"handle" validate:"atproto-handle"`
 }
 
-func (s *Server) handleIdentityUpdateHandle(e echo.Context) error {
+func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleIdentityUpdateHandle")
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoIdentityUpdateHandleRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	req.Handle = strings.ToLower(req.Handle)
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
-	ctx := context.WithValue(e.Request().Context(), "skip-cache", true)
+	ctx := context.WithValue(r.Context(), "skip-cache", true)
 
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 		if err != nil {
 			logger.Error("error fetching doc", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		latest := log[len(log)-1]
@@ -71,15 +75,18 @@ func (s *Server) handleIdentityUpdateHandle(e echo.Context) error {
 		k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
 		if err != nil {
 			logger.Error("error parsing signing key", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if err := s.plcClient.SignOp(k, &op); err != nil {
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		if err := s.plcClient.SendOperation(e.Request().Context(), repo.Repo.Did, &op); err != nil {
-			return err
+		if err := s.plcClient.SendOperation(r.Context(), repo.Repo.Did, &op); err != nil {
+			helpers.ServerError(w, nil)
+			return
 		}
 	}
 
@@ -98,8 +105,7 @@ func (s *Server) handleIdentityUpdateHandle(e echo.Context) error {
 
 	if err := s.db.Exec(ctx, "UPDATE actors SET handle = ? WHERE did = ?", nil, req.Handle, repo.Repo.Did).Error; err != nil {
 		logger.Error("error updating handle in db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
-
-	return nil
 }

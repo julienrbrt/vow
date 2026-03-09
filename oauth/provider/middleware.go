@@ -1,20 +1,20 @@
 package provider
 
 import (
-	"github.com/labstack/echo/v4"
+	"net/http"
 )
 
-func (p *Provider) BaseMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(e echo.Context) error {
-		e.Response().Header().Set("cache-control", "no-store")
-		e.Response().Header().Set("pragma", "no-cache")
+func (p *Provider) BaseMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("cache-control", "no-store")
+		w.Header().Set("pragma", "no-cache")
 
 		nonce := p.NextNonce()
 		if nonce != "" {
-			e.Response().Header().Set("DPoP-Nonce", nonce)
-			e.Response().Header().Add("access-control-expose-headers", "DPoP-Nonce")
+			w.Header().Set("DPoP-Nonce", nonce)
+			w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 		}
 
-		return next(e)
-	}
+		next.ServeHTTP(w, r)
+	})
 }

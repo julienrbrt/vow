@@ -1,9 +1,10 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerRefreshSessionResponse struct {
@@ -15,30 +16,33 @@ type ComAtprotoServerRefreshSessionResponse struct {
 	Status     *string `json:"status,omitempty"`
 }
 
-func (s *Server) handleRefreshSession(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleRefreshSession(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerRefreshSession")
 
-	token := e.Get("token").(string)
-	repo := e.Get("repo").(*models.RepoActor)
+	token, _ := getContextValue[string](r, contextKeyToken)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	if err := s.db.Exec(ctx, "DELETE FROM refresh_tokens WHERE token = ?", nil, token).Error; err != nil {
 		logger.Error("error getting refresh token from db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.db.Exec(ctx, "DELETE FROM tokens WHERE refresh_token = ?", nil, token).Error; err != nil {
 		logger.Error("error deleting access token from db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	sess, err := s.createSession(ctx, &repo.Repo)
 	if err != nil {
 		logger.Error("error creating new session for refresh", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoServerRefreshSessionResponse{
+	s.writeJSON(w, 200, ComAtprotoServerRefreshSessionResponse{
 		AccessJwt:  sess.AccessToken,
 		RefreshJwt: sess.RefreshToken,
 		Handle:     repo.Handle,

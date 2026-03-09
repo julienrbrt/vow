@@ -1,8 +1,9 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSyncGetRepoStatusResponse struct {
@@ -13,20 +14,24 @@ type ComAtprotoSyncGetRepoStatusResponse struct {
 }
 
 // TODO: make this actually do the right thing
-func (s *Server) handleSyncGetRepoStatus(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleSyncGetRepoStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	logger := s.logger.With("name", "handleSyncGetRepoStatus")
 
-	did := e.QueryParam("did")
+	did := r.URL.Query().Get("did")
 	if did == "" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	urepo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
-		return err
+		logger.Error("could not find repo", "did", did, "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoSyncGetRepoStatusResponse{
+	s.writeJSON(w, http.StatusOK, ComAtprotoSyncGetRepoStatusResponse{
 		Did:    urepo.Repo.Did,
 		Active: urepo.Active(),
 		Status: urepo.Status(),

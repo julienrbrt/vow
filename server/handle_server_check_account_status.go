@@ -1,10 +1,11 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerCheckAccountStatusResponse struct {
@@ -19,11 +20,11 @@ type ComAtprotoServerCheckAccountStatusResponse struct {
 	ImportedBlobs      int64  `json:"importedBlobs"`
 }
 
-func (s *Server) handleServerCheckAccountStatus(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerCheckAccountStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerCheckAccountStatus")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	resp := ComAtprotoServerCheckAccountStatusResponse{
 		Activated:     true, // TODO: should allow for deactivation etc.
@@ -35,7 +36,8 @@ func (s *Server) handleServerCheckAccountStatus(e echo.Context) error {
 	rootcid, err := cid.Cast(urepo.Root)
 	if err != nil {
 		logger.Error("error casting cid", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	resp.RepoCommit = rootcid.String()
 
@@ -46,23 +48,26 @@ func (s *Server) handleServerCheckAccountStatus(e echo.Context) error {
 	var blockCtResp CountResp
 	if err := s.db.Raw(ctx, "SELECT COUNT(*) AS ct FROM blocks WHERE did = ?", nil, urepo.Repo.Did).Scan(&blockCtResp).Error; err != nil {
 		logger.Error("error getting block count", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	resp.RepoBlocks = blockCtResp.Ct
 
 	var recCtResp CountResp
 	if err := s.db.Raw(ctx, "SELECT COUNT(*) AS ct FROM records WHERE did = ?", nil, urepo.Repo.Did).Scan(&recCtResp).Error; err != nil {
 		logger.Error("error getting record count", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	resp.IndexedRecords = recCtResp.Ct
 
 	var blobCtResp CountResp
 	if err := s.db.Raw(ctx, "SELECT COUNT(*) AS ct FROM blobs WHERE did = ?", nil, urepo.Repo.Did).Scan(&blobCtResp).Error; err != nil {
 		logger.Error("error getting record count", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	resp.ExpectedBlobs = blobCtResp.Ct
 
-	return e.JSON(200, resp)
+	s.writeJSON(w, 200, resp)
 }

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
+
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoRepoApplyWritesInput struct {
@@ -25,26 +27,29 @@ type ComAtprotoRepoApplyWritesOutput struct {
 	Results []ApplyWriteResult `json:"results"`
 }
 
-func (s *Server) handleApplyWrites(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleApplyWrites(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleRepoApplyWrites")
 
 	var req ComAtprotoRepoApplyWritesInput
-	if err := e.Bind(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
+	if err := s.validator.Struct(req); err != nil {
 		logger.Error("error validating", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	if repo.Repo.Did != req.Repo {
 		logger.Warn("mismatched repo/auth")
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	ops := make([]Op, 0, len(req.Writes))
@@ -60,7 +65,8 @@ func (s *Server) handleApplyWrites(e echo.Context) error {
 	results, err := s.repoman.applyWrites(ctx, repo.Repo, ops, req.SwapCommit)
 	if err != nil {
 		logger.Error("error applying writes", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	commit := *results[0].Commit
@@ -69,7 +75,7 @@ func (s *Server) handleApplyWrites(e echo.Context) error {
 		results[i].Commit = nil
 	}
 
-	return e.JSON(200, ComAtprotoRepoApplyWritesOutput{
+	s.writeJSON(w, http.StatusOK, ComAtprotoRepoApplyWritesOutput{
 		Commit:  commit,
 		Results: results,
 	})

@@ -1,9 +1,10 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSyncListReposResponse struct {
@@ -20,31 +21,33 @@ type ComAtprotoSyncListReposRepoItem struct {
 }
 
 // TODO: paginate this bitch
-func (s *Server) handleListRepos(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
 	var repos []models.Repo
 	if err := s.db.Raw(ctx, "SELECT * FROM repos ORDER BY created_at DESC LIMIT 500", nil).Scan(&repos).Error; err != nil {
-		return err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	items := make([]ComAtprotoSyncListReposRepoItem, 0, len(repos))
-	for _, r := range repos {
-		c, err := cid.Cast(r.Root)
+	for _, repo := range repos {
+		c, err := cid.Cast(repo.Root)
 		if err != nil {
-			return err
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		items = append(items, ComAtprotoSyncListReposRepoItem{
-			Did:    r.Did,
+			Did:    repo.Did,
 			Head:   c.String(),
-			Rev:    r.Rev,
-			Active: r.Active(),
-			Status: r.Status(),
+			Rev:    repo.Rev,
+			Active: repo.Active(),
+			Status: repo.Status(),
 		})
 	}
 
-	return e.JSON(200, ComAtprotoSyncListReposResponse{
+	s.writeJSON(w, 200, ComAtprotoSyncListReposResponse{
 		Cursor: nil,
 		Repos:  items,
 	})

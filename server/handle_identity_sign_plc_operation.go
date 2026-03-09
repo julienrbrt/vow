@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/haileyok/cocoon/plc"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSignPlcOperationRequest struct {
@@ -26,38 +27,44 @@ type ComAtprotoSignPlcOperationResponse struct {
 	Operation plc.Operation `json:"operation"`
 }
 
-func (s *Server) handleSignPlcOperation(e echo.Context) error {
+func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleSignPlcOperation")
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoSignPlcOperationRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if !strings.HasPrefix(repo.Repo.Did, "did:plc:") {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	if repo.PlcOperationCode == nil || repo.PlcOperationCodeExpiresAt == nil {
-		return helpers.InputError(e, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		return
 	}
 
 	if *repo.PlcOperationCode != req.Token {
-		return helpers.InvalidTokenError(e)
+		helpers.InvalidTokenError(w)
+		return
 	}
 
 	if time.Now().UTC().After(*repo.PlcOperationCodeExpiresAt) {
-		return helpers.ExpiredTokenError(e)
+		helpers.ExpiredTokenError(w)
+		return
 	}
 
-	ctx := context.WithValue(e.Request().Context(), "skip-cache", true)
+	ctx := context.WithValue(r.Context(), "skip-cache", true)
 	log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 	if err != nil {
 		logger.Error("error fetching doc", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	latest := log[len(log)-1]
@@ -86,20 +93,23 @@ func (s *Server) handleSignPlcOperation(e echo.Context) error {
 	k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
 	if err != nil {
 		logger.Error("error parsing signing key", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.plcClient.SignOp(k, &op); err != nil {
 		logger.Error("error signing plc operation", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET plc_operation_code = NULL, plc_operation_code_expires_at = NULL WHERE did = ?", nil, repo.Repo.Did).Error; err != nil {
 		logger.Error("error updating repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoSignPlcOperationResponse{
+	s.writeJSON(w, 200, ComAtprotoSignPlcOperationResponse{
 		Operation: op,
 	})
 }

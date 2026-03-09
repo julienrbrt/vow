@@ -1,15 +1,16 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/gorilla/sessions"
-	"github.com/labstack/echo-contrib/session"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleAccountSignout(e echo.Context) error {
-	sess, err := session.Get(s.config.SessionCookieKey, e)
+func (s *Server) handleAccountSignout(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.sessions.Get(r, s.config.SessionCookieKey)
 	if err != nil {
-		return err
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
 	}
 
 	sess.Options = &sessions.Options{
@@ -20,16 +21,17 @@ func (s *Server) handleAccountSignout(e echo.Context) error {
 
 	sess.Values = map[any]any{}
 
-	if err := sess.Save(e.Request(), e.Response()); err != nil {
-		return err
+	if err := sess.Save(r, w); err != nil {
+		http.Error(w, "session save error", http.StatusInternalServerError)
+		return
 	}
 
-	reqUri := e.QueryParam("request_uri")
+	reqUri := r.URL.Query().Get("request_uri")
 
 	redirect := "/account/signin"
 	if reqUri != "" {
-		redirect += "?" + e.QueryParams().Encode()
+		redirect += "?" + r.URL.Query().Encode()
 	}
 
-	return e.Redirect(303, redirect)
+	http.Redirect(w, r, redirect, 303)
 }

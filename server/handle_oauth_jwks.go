@@ -1,12 +1,12 @@
 package server
 
-import "github.com/labstack/echo/v4"
+import "net/http"
 
 type OauthJwksResponse struct {
 	Keys []any `json:"keys"`
 }
 
 // TODO: ?
-func (s *Server) handleOauthJwks(e echo.Context) error {
-	return e.JSON(200, OauthJwksResponse{Keys: []any{}})
+func (s *Server) handleOauthJwks(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, OauthJwksResponse{Keys: []any{}})
 }

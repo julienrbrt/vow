@@ -1,8 +1,6 @@
 package server
 
-import (
-	"github.com/labstack/echo/v4"
-)
+import "net/http"
 
 type Label struct {
 	Ver *int    `json:"ver,omitempty"`
@@ -21,13 +19,14 @@ type ComAtprotoLabelQueryLabelsResponse struct {
 	Labels []Label `json:"labels"`
 }
 
-func (s *Server) handleLabelQueryLabels(e echo.Context) error {
-	svc := e.Request().Header.Get("atproto-proxy")
+func (s *Server) handleLabelQueryLabels(w http.ResponseWriter, r *http.Request) {
+	svc := r.Header.Get("atproto-proxy")
 	if svc != "" || s.config.FallbackProxy != "" {
-		return s.handleProxy(e)
+		s.handleProxy(w, r)
+		return
 	}
 
-	return e.JSON(200, ComAtprotoLabelQueryLabelsResponse{
+	s.writeJSON(w, 200, ComAtprotoLabelQueryLabelsResponse{
 		Cursor: nil,
 		Labels: []Label{},
 	})

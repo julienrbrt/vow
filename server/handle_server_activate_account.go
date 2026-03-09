@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -9,7 +10,6 @@ import (
 	"github.com/bluesky-social/indigo/util"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerActivateAccountRequest struct {
@@ -17,21 +17,16 @@ type ComAtprotoServerActivateAccountRequest struct {
 	DeleteAfter time.Time `json:"deleteAfter"`
 }
 
-func (s *Server) handleServerActivateAccount(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerActivateAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerActivateAccount")
 
-	var req ComAtprotoServerDeactivateAccountRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
-	}
-
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET deactivated = ? WHERE did = ?", nil, false, urepo.Repo.Did).Error; err != nil {
-		logger.Error("error updating account status to deactivated", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error updating account status to activated", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
@@ -44,5 +39,5 @@ func (s *Server) handleServerActivateAccount(e echo.Context) error {
 		},
 	})
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

@@ -1,11 +1,12 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerUpdateEmailRequest struct {
@@ -14,40 +15,46 @@ type ComAtprotoServerUpdateEmailRequest struct {
 	Token           string `json:"token"`
 }
 
-func (s *Server) handleServerUpdateEmail(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerUpdateEmail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerUpdateEmail")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoServerUpdateEmailRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
 
 	// To disable email auth factor a token is required.
 	// To enable email auth factor a token is not required.
 	// If updating an email address, a token will be sent anyway
-	if urepo.TwoFactorType != models.TwoFactorTypeNone && req.EmailAuthFactor == false && req.Token == "" {
-		return helpers.InvalidTokenError(e)
+	if urepo.TwoFactorType != models.TwoFactorTypeNone && !req.EmailAuthFactor && req.Token == "" {
+		helpers.InvalidTokenError(w)
+		return
 	}
 
 	if req.Token != "" {
 		if urepo.EmailUpdateCode == nil || urepo.EmailUpdateCodeExpiresAt == nil {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		if *urepo.EmailUpdateCode != req.Token {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		if time.Now().UTC().After(*urepo.EmailUpdateCodeExpiresAt) {
-			return helpers.ExpiredTokenError(e)
+			helpers.ExpiredTokenError(w)
+			return
 		}
 	}
 
@@ -66,8 +73,9 @@ func (s *Server) handleServerUpdateEmail(e echo.Context) error {
 
 	if err := s.db.Exec(ctx, query, nil, twoFactorType, req.Email, urepo.Repo.Did).Error; err != nil {
 		logger.Error("error updating repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

@@ -1,7 +1,11 @@
 package server
 
-import "github.com/labstack/echo/v4"
+import (
+	"fmt"
+	"net/http"
+)
 
-func (s *Server) handleRobots(e echo.Context) error {
-	return e.String(200, "# Beep boop beep boop\n\n# Crawl me 🥺\nUser-agent: *\nAllow: /")
+func (s *Server) handleRobots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprint(w, "# Beep boop beep boop\n\n# Crawl me 🥺\nUser-agent: *\nAllow: /")
 }

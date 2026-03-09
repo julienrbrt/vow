@@ -1,11 +1,13 @@
 package server
 
 import (
+	"net/http"
+	"strconv"
+
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSyncListBlobsResponse struct {
@@ -13,20 +15,24 @@ type ComAtprotoSyncListBlobsResponse struct {
 	Cids   []string `json:"cids"`
 }
 
-func (s *Server) handleSyncListBlobs(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleSyncListBlobs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleSyncListBlobs")
 
-	did := e.QueryParam("did")
+	did := r.URL.Query().Get("did")
 	if did == "" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	// TODO: add tid param
-	cursor := e.QueryParam("cursor")
-	limit, err := getLimitFromContext(e, 50)
-	if err != nil {
-		return helpers.InputError(e, nil)
+	cursor := r.URL.Query().Get("cursor")
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
 	}
 
 	cursorquery := ""
@@ -41,20 +47,23 @@ func (s *Server) handleSyncListBlobs(e echo.Context) error {
 	urepo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
 		logger.Error("could not find user for requested blobs", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	status := urepo.Status()
 	if status != nil {
 		if *status == "deactivated" {
-			return helpers.InputError(e, to.StringPtr("RepoDeactivated"))
+			helpers.InputError(w, to.StringPtr("RepoDeactivated"))
+			return
 		}
 	}
 
 	var blobs []models.Blob
 	if err := s.db.Raw(ctx, "SELECT * FROM blobs WHERE did = ? "+cursorquery+" ORDER BY created_at DESC LIMIT ?", nil, params...).Scan(&blobs).Error; err != nil {
 		logger.Error("error getting records", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	cstrs := make([]string, 0, len(blobs))
@@ -72,11 +81,11 @@ func (s *Server) handleSyncListBlobs(e echo.Context) error {
 	}
 
 	var newcursor *string
-	if len(blobs) == 50 {
+	if len(blobs) == limit {
 		newcursor = &blobs[len(blobs)-1].CreatedAt
 	}
 
-	return e.JSON(200, ComAtprotoSyncListBlobsResponse{
+	s.writeJSON(w, http.StatusOK, ComAtprotoSyncListBlobsResponse{
 		Cursor: newcursor,
 		Cids:   cstrs,
 	})

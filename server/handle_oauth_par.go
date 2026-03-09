@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
@@ -10,7 +11,6 @@ import (
 	"github.com/haileyok/cocoon/oauth/constants"
 	"github.com/haileyok/cocoon/oauth/dpop"
 	"github.com/haileyok/cocoon/oauth/provider"
-	"github.com/labstack/echo/v4"
 )
 
 type OauthParResponse struct {
@@ -18,47 +18,80 @@ type OauthParResponse struct {
 	RequestURI string `json:"request_uri"`
 }
 
-func (s *Server) handleOauthPar(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleOauthPar")
 
-	var parRequest provider.ParRequest
-	if err := e.Bind(&parRequest); err != nil {
-		logger.Error("error binding for par request", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := r.ParseForm(); err != nil {
+		logger.Error("error parsing par request form", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(parRequest); err != nil {
+	parRequest := provider.ParRequest{
+		AuthenticateClientRequestBase: provider.AuthenticateClientRequestBase{
+			ClientID: r.FormValue("client_id"),
+		},
+		ResponseType:        r.FormValue("response_type"),
+		State:               r.FormValue("state"),
+		RedirectURI:         r.FormValue("redirect_uri"),
+		Scope:               r.FormValue("scope"),
+		CodeChallengeMethod: r.FormValue("code_challenge_method"),
+	}
+	if v := r.FormValue("code_challenge"); v != "" {
+		parRequest.CodeChallenge = to.StringPtr(v)
+	}
+	if v := r.FormValue("login_hint"); v != "" {
+		parRequest.LoginHint = to.StringPtr(v)
+	}
+	if v := r.FormValue("dpop_jkt"); v != "" {
+		parRequest.DpopJkt = to.StringPtr(v)
+	}
+	if v := r.FormValue("response_mode"); v != "" {
+		parRequest.ResponseMode = to.StringPtr(v)
+	}
+	if v := r.FormValue("client_assertion_type"); v != "" {
+		parRequest.ClientAssertionType = to.StringPtr(v)
+	}
+	if v := r.FormValue("client_assertion"); v != "" {
+		parRequest.ClientAssertion = to.StringPtr(v)
+	}
+
+	if err := s.validator.Struct(parRequest); err != nil {
 		logger.Error("missing parameters for par request", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	// TODO: this seems wrong. should be a way to get the entire request url i believe, but this will work for now
-	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(e.Request().Method, "https://"+s.config.Hostname+e.Request().URL.String(), e.Request().Header, nil)
+	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, nil)
 	if err != nil {
 		if errors.Is(err, dpop.ErrUseDpopNonce) {
 			nonce := s.oauthProvider.NextNonce()
 			if nonce != "" {
-				e.Response().Header().Set("DPoP-Nonce", nonce)
-				e.Response().Header().Add("access-control-expose-headers", "DPoP-Nonce")
+				w.Header().Set("DPoP-Nonce", nonce)
+				w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 			}
-			logger.Error("nonce error: use_dpop_nonce", "headers", e.Request().Header)
-			return e.JSON(400, map[string]string{
+			logger.Error("nonce error: use_dpop_nonce", "headers", r.Header)
+			s.writeJSON(w, 400, map[string]string{
 				"error": "use_dpop_nonce",
 			})
+			return
 		}
 		logger.Error("error getting dpop proof", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
-	client, clientAuth, err := s.oauthProvider.AuthenticateClient(e.Request().Context(), parRequest.AuthenticateClientRequestBase, dpopProof, &provider.AuthenticateClientOptions{
+	client, clientAuth, err := s.oauthProvider.AuthenticateClient(ctx, parRequest.AuthenticateClientRequestBase, dpopProof, &provider.AuthenticateClientOptions{
 		// rfc9449
 		// https://github.com/bluesky-social/atproto/blob/main/packages/oauth/oauth-provider/src/oauth-provider.ts#L473
 		AllowMissingDpopProof: true,
 	})
 	if err != nil {
 		logger.Error("error authenticating client", "client_id", parRequest.ClientID, "error", err)
-		return helpers.InputError(e, to.StringPtr(err.Error()))
+		helpers.InputError(w, to.StringPtr(err.Error()))
+		return
 	}
 
 	if parRequest.DpopJkt == nil {
@@ -69,13 +102,15 @@ func (s *Server) handleOauthPar(e echo.Context) error {
 		if !client.Metadata.DpopBoundAccessTokens {
 			msg := "dpop bound access tokens are not enabled for this client"
 			logger.Error(msg)
-			return helpers.InputError(e, &msg)
+			helpers.InputError(w, &msg)
+			return
 		}
 
 		if dpopProof.JKT != *parRequest.DpopJkt {
 			msg := "supplied dpop jkt does not match header dpop jkt"
 			logger.Error(msg)
-			return helpers.InputError(e, &msg)
+			helpers.InputError(w, &msg)
+			return
 		}
 	}
 
@@ -92,12 +127,13 @@ func (s *Server) handleOauthPar(e echo.Context) error {
 
 	if err := s.db.Create(ctx, authRequest, nil).Error; err != nil {
 		logger.Error("error creating auth request in db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	uri := oauth.EncodeRequestUri(id)
 
-	return e.JSON(201, OauthParResponse{
+	s.writeJSON(w, 201, OauthParResponse{
 		ExpiresIn:  int64(constants.ParExpiresIn.Seconds()),
 		RequestURI: uri,
 	})

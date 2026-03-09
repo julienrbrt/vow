@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -14,52 +16,74 @@ import (
 	"github.com/haileyok/cocoon/models"
 	"github.com/haileyok/cocoon/oauth/dpop"
 	"github.com/haileyok/cocoon/oauth/provider"
-	"github.com/labstack/echo/v4"
 	"gitlab.com/yawning/secp256k1-voi"
 	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 	"gorm.io/gorm"
 )
 
-func (s *Server) handleAdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(e echo.Context) error {
-		username, password, ok := e.Request().BasicAuth()
-		if !ok || username != "admin" || password != s.config.AdminPassword {
-			return helpers.InputError(e, to.StringPtr("Unauthorized"))
-		}
+// context keys for values set by middleware
+type contextKey string
 
-		if err := next(e); err != nil {
-			e.Error(err)
-		}
+const (
+	contextKeyRepo   contextKey = "repo"
+	contextKeyDid    contextKey = "did"
+	contextKeyToken  contextKey = "token"
+	contextKeyScopes contextKey = "scopes"
 
-		return nil
-	}
+	// used by proxy handler to override token fields
+	contextKeyProxyTokenLxm contextKey = "proxyTokenLxm"
+	contextKeyProxyTokenAud contextKey = "proxyTokenAud"
+)
+
+func setContextValue(r *http.Request, key contextKey, value any) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), key, value))
 }
 
-func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(e echo.Context) error {
-		ctx := e.Request().Context()
+func getContextValue[T any](r *http.Request, key contextKey) (T, bool) {
+	v, ok := r.Context().Value(key).(T)
+	return v, ok
+}
+
+func (s *Server) handleAdminMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != s.config.AdminPassword {
+			helpers.InputError(w, to.StringPtr("Unauthorized"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		logger := s.logger.With("name", "handleLegacySessionMiddleware")
 
-		authheader := e.Request().Header.Get("authorization")
+		authheader := r.Header.Get("authorization")
 		if authheader == "" {
-			return e.JSON(401, map[string]string{"error": "Unauthorized"})
+			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
+			return
 		}
 
 		pts := strings.Split(authheader, " ")
 		if len(pts) != 2 {
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		// move on to oauth session middleware if this is a dpop token
 		if pts[0] == "DPoP" {
-			return next(e)
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		tokenstr := pts[1]
 		token, _, err := new(jwt.Parser).ParseUnverified(tokenstr, jwt.MapClaims{})
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		var did string
@@ -68,23 +92,26 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 		// service auth tokens
 		lxm, hasLxm := claims["lxm"]
 		if hasLxm {
-			pts := strings.Split(e.Request().URL.String(), "/")
+			pts := strings.Split(r.URL.String(), "/")
 			if lxm != pts[len(pts)-1] {
 				logger.Error("service auth lxm incorrect", "lxm", lxm, "expected", pts[len(pts)-1], "error", err)
-				return helpers.InputError(e, nil)
+				helpers.InputError(w, nil)
+				return
 			}
 
 			maybeDid, ok := claims["iss"].(string)
 			if !ok {
 				logger.Error("no iss in service auth token", "error", err)
-				return helpers.InputError(e, nil)
+				helpers.InputError(w, nil)
+				return
 			}
 			did = maybeDid
 
 			maybeRepo, err := s.getRepoActorByDid(ctx, did)
 			if err != nil {
 				logger.Error("error fetching repo", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 			repo = maybeRepo
 		}
@@ -98,11 +125,13 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 			})
 			if err != nil {
 				logger.Error("error parsing jwt", "error", err)
-				return helpers.ExpiredTokenError(e)
+				helpers.ExpiredTokenError(w)
+				return
 			}
 
 			if !token.Valid {
-				return helpers.InvalidTokenError(e)
+				helpers.InvalidTokenError(w)
+				return
 			}
 		} else {
 			kpts := strings.Split(tokenstr, ".")
@@ -111,12 +140,14 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 			sigBytes, err := base64.RawURLEncoding.DecodeString(kpts[2])
 			if err != nil {
 				logger.Error("error decoding signature bytes", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 
 			if len(sigBytes) != 64 {
 				logger.Error("incorrect sigbytes length", "length", len(sigBytes))
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 
 			rBytes := sigBytes[:32]
@@ -128,12 +159,14 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 				sub, ok := claims["sub"].(string)
 				if !ok {
 					s.logger.Error("no sub claim in ES256K token and repo not set")
-					return helpers.InvalidTokenError(e)
+					helpers.InvalidTokenError(w)
+					return
 				}
 				maybeRepo, err := s.getRepoActorByDid(ctx, sub)
 				if err != nil {
 					s.logger.Error("error fetching repo for ES256K verification", "error", err)
-					return helpers.ServerError(e, nil)
+					helpers.ServerError(w, nil)
+					return
 				}
 				repo = maybeRepo
 				did = sub
@@ -142,29 +175,34 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 			sk, err := secp256k1secec.NewPrivateKey(repo.SigningKey)
 			if err != nil {
 				logger.Error("can't load private key", "error", err)
-				return err
+				helpers.ServerError(w, nil)
+				return
 			}
 
 			pubKey, ok := sk.Public().(*secp256k1secec.PublicKey)
 			if !ok {
 				logger.Error("error getting public key from sk")
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 
 			verified := pubKey.VerifyRaw(hash[:], rr, ss)
 			if !verified {
 				logger.Error("error verifying", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 		}
 
-		isRefresh := e.Request().URL.Path == "/xrpc/com.atproto.server.refreshSession"
+		isRefresh := r.URL.Path == "/xrpc/com.atproto.server.refreshSession"
 		scope, _ := claims["scope"].(string)
 
 		if isRefresh && scope != "com.atproto.refresh" {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		} else if !hasLxm && !isRefresh && scope != "com.atproto.access" {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		table := "tokens"
@@ -179,125 +217,137 @@ func (s *Server) handleLegacySessionMiddleware(next echo.HandlerFunc) echo.Handl
 			var result Result
 			if err := s.db.Raw(ctx, "SELECT EXISTS(SELECT 1 FROM "+table+" WHERE token = ?) AS found", nil, tokenstr).Scan(&result).Error; err != nil {
 				if err == gorm.ErrRecordNotFound {
-					return helpers.InvalidTokenError(e)
+					helpers.InvalidTokenError(w)
+					return
 				}
 
 				logger.Error("error getting token from db", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 
 			if !result.Found {
-				return helpers.InvalidTokenError(e)
+				helpers.InvalidTokenError(w)
+				return
 			}
 		}
 
 		exp, ok := claims["exp"].(float64)
 		if !ok {
 			logger.Error("error getting iat from token")
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if exp < float64(time.Now().UTC().Unix()) {
-			return helpers.ExpiredTokenError(e)
+			helpers.ExpiredTokenError(w)
+			return
 		}
 
 		if repo == nil {
 			maybeRepo, err := s.getRepoActorByDid(ctx, claims["sub"].(string))
 			if err != nil {
 				logger.Error("error fetching repo", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 			repo = maybeRepo
 			did = repo.Repo.Did
 		}
 
-		e.Set("repo", repo)
-		e.Set("did", did)
-		e.Set("token", tokenstr)
+		r = setContextValue(r, contextKeyRepo, repo)
+		r = setContextValue(r, contextKeyDid, did)
+		r = setContextValue(r, contextKeyToken, tokenstr)
 
-		if err := next(e); err != nil {
-			return helpers.InvalidTokenError(e)
-		}
-
-		return nil
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
-func (s *Server) handleOauthSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(e echo.Context) error {
-		ctx := e.Request().Context()
+func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		logger := s.logger.With("name", "handleOauthSessionMiddleware")
 
-		authheader := e.Request().Header.Get("authorization")
+		authheader := r.Header.Get("authorization")
 		if authheader == "" {
-			return e.JSON(401, map[string]string{"error": "Unauthorized"})
+			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
+			return
 		}
 
 		pts := strings.Split(authheader, " ")
 		if len(pts) != 2 {
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		if pts[0] != "DPoP" {
-			return next(e)
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		accessToken := pts[1]
 
 		nonce := s.oauthProvider.NextNonce()
 		if nonce != "" {
-			e.Response().Header().Set("DPoP-Nonce", nonce)
-			e.Response().Header().Add("access-control-expose-headers", "DPoP-Nonce")
+			w.Header().Set("DPoP-Nonce", nonce)
+			w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 		}
 
-		proof, err := s.oauthProvider.DpopManager.CheckProof(e.Request().Method, "https://"+s.config.Hostname+e.Request().URL.String(), e.Request().Header, to.StringPtr(accessToken))
+		proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, to.StringPtr(accessToken))
 		if err != nil {
 			if errors.Is(err, dpop.ErrUseDpopNonce) {
-				e.Response().Header().Set("WWW-Authenticate", `DPoP error="use_dpop_nonce"`)
-				e.Response().Header().Add("access-control-expose-headers", "WWW-Authenticate")
-				return e.JSON(401, map[string]string{
+				w.Header().Set("WWW-Authenticate", `DPoP error="use_dpop_nonce"`)
+				w.Header().Add("access-control-expose-headers", "WWW-Authenticate")
+				s.writeJSON(w, 401, map[string]string{
 					"error": "use_dpop_nonce",
 				})
+				return
 			}
 			logger.Error("invalid dpop proof", "error", err)
-			return helpers.InputError(e, nil)
+			helpers.InputError(w, nil)
+			return
 		}
 
 		var oauthToken provider.OauthToken
 		if err := s.db.Raw(ctx, "SELECT * FROM oauth_tokens WHERE token = ?", nil, accessToken).Scan(&oauthToken).Error; err != nil {
 			logger.Error("error finding access token in db", "error", err)
-			return helpers.InputError(e, nil)
+			helpers.InputError(w, nil)
+			return
 		}
 
 		if oauthToken.Token == "" {
-			return helpers.InvalidTokenError(e)
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		if *oauthToken.Parameters.DpopJkt != proof.JKT {
 			logger.Error("jkt mismatch", "token", oauthToken.Parameters.DpopJkt, "proof", proof.JKT)
-			return helpers.InputError(e, to.StringPtr("dpop jkt mismatch"))
+			helpers.InputError(w, to.StringPtr("dpop jkt mismatch"))
+			return
 		}
 
 		if time.Now().After(oauthToken.ExpiresAt) {
-			e.Response().Header().Set("WWW-Authenticate", `DPoP error="invalid_token", error_description="Token expired"`)
-			e.Response().Header().Add("access-control-expose-headers", "WWW-Authenticate")
-			return e.JSON(401, map[string]string{
+			w.Header().Set("WWW-Authenticate", `DPoP error="invalid_token", error_description="Token expired"`)
+			w.Header().Add("access-control-expose-headers", "WWW-Authenticate")
+			s.writeJSON(w, 401, map[string]string{
 				"error":             "invalid_token",
 				"error_description": "Token expired",
 			})
+			return
 		}
 
 		repo, err := s.getRepoActorByDid(ctx, oauthToken.Sub)
 		if err != nil {
 			logger.Error("could not find actor in db", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		e.Set("repo", repo)
-		e.Set("did", repo.Repo.Did)
-		e.Set("token", accessToken)
-		e.Set("scopes", strings.Split(oauthToken.Parameters.Scope, " "))
+		r = setContextValue(r, contextKeyRepo, repo)
+		r = setContextValue(r, contextKeyDid, repo.Repo.Did)
+		r = setContextValue(r, contextKeyToken, accessToken)
+		r = setContextValue(r, contextKeyScopes, strings.Split(oauthToken.Parameters.Scope, " "))
 
-		return next(e)
-	}
+		next.ServeHTTP(w, r)
+	})
 }

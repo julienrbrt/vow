@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"net/http"
 
 	"github.com/bluesky-social/indigo/carstore"
 	"github.com/haileyok/cocoon/internal/helpers"
@@ -9,26 +10,28 @@ import (
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleSyncGetRecord(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleSyncGetRecord(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleSyncGetRecord")
 
-	did := e.QueryParam("did")
-	collection := e.QueryParam("collection")
-	rkey := e.QueryParam("rkey")
+	did := r.URL.Query().Get("did")
+	collection := r.URL.Query().Get("collection")
+	rkey := r.URL.Query().Get("rkey")
 
 	var urepo models.Repo
 	if err := s.db.Raw(ctx, "SELECT * FROM repos WHERE did = ?", nil, did).Scan(&urepo).Error; err != nil {
 		logger.Error("error getting repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	root, blocks, err := s.repoman.getRecordProof(ctx, urepo, collection, rkey)
 	if err != nil {
-		return err
+		logger.Error("error getting record proof", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	buf := new(bytes.Buffer)
@@ -37,18 +40,27 @@ func (s *Server) handleSyncGetRecord(e echo.Context) error {
 		Roots:   []cid.Cid{root},
 		Version: 1,
 	})
+	if err != nil {
+		logger.Error("error dumping car header", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
 
 	if _, err := carstore.LdWrite(buf, hb); err != nil {
 		logger.Error("error writing to car", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	for _, blk := range blocks {
 		if _, err := carstore.LdWrite(buf, blk.Cid().Bytes(), blk.RawData()); err != nil {
-			logger.Error("error writing to car", "error", err)
-			return helpers.ServerError(e, nil)
+			logger.Error("error writing block to car", "error", err)
+			helpers.ServerError(w, nil)
+			return
 		}
 	}
 
-	return e.Stream(200, "application/vnd.ipld.car", bytes.NewReader(buf.Bytes()))
+	w.Header().Set("Content-Type", "application/vnd.ipld.car")
+	w.WriteHeader(http.StatusOK)
+	w.Write(buf.Bytes())
 }

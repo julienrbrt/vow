@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,12 +14,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 )
 
-func (s *Server) getAtprotoProxyEndpointFromRequest(e echo.Context) (string, string, error) {
-	svc := e.Request().Header.Get("atproto-proxy")
+func (s *Server) getAtprotoProxyEndpointFromRequest(r *http.Request) (string, string, error) {
+	svc := r.Header.Get("atproto-proxy")
 	if svc == "" && s.config.FallbackProxy != "" {
 		svc = s.config.FallbackProxy
 	}
@@ -31,7 +31,7 @@ func (s *Server) getAtprotoProxyEndpointFromRequest(e echo.Context) (string, str
 	svcDid := svcPts[0]
 	svcId := "#" + svcPts[1]
 
-	doc, err := s.passport.FetchDoc(e.Request().Context(), svcDid)
+	doc, err := s.passport.FetchDoc(r.Context(), svcDid)
 	if err != nil {
 		return "", "", err
 	}
@@ -46,37 +46,40 @@ func (s *Server) getAtprotoProxyEndpointFromRequest(e echo.Context) (string, str
 	return endpoint, svcDid, nil
 }
 
-func (s *Server) handleProxy(e echo.Context) error {
+func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("handler", "handleProxy")
 
-	repo, isAuthed := e.Get("repo").(*models.RepoActor)
+	repo, isAuthed := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	pts := strings.Split(e.Request().URL.Path, "/")
+	pts := strings.Split(r.URL.Path, "/")
 	if len(pts) != 3 {
-		return fmt.Errorf("incorrect number of parts")
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	endpoint, svcDid, err := s.getAtprotoProxyEndpointFromRequest(e)
+	endpoint, svcDid, err := s.getAtprotoProxyEndpointFromRequest(r)
 	if err != nil {
 		logger.Error("could not get atproto proxy", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	requrl := e.Request().URL
+	requrl := *r.URL
 	requrl.Host = strings.TrimPrefix(endpoint, "https://")
 	requrl.Scheme = "https"
 
-	body := e.Request().Body
-	if e.Request().Method == "GET" {
-		body = nil
+	var body io.Reader
+	if r.Method != http.MethodGet {
+		body = r.Body
 	}
 
-	req, err := http.NewRequest(e.Request().Method, requrl.String(), body)
+	req, err := http.NewRequest(r.Method, requrl.String(), body)
 	if err != nil {
-		return err
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	req.Header = e.Request().Header.Clone()
+	req.Header = r.Header.Clone()
 
 	if isAuthed {
 		// this is a little dumb. i should probably figure out a better way to do this, and use
@@ -91,7 +94,8 @@ func (s *Server) handleProxy(e echo.Context) error {
 		hj, err := json.Marshal(header)
 		if err != nil {
 			logger.Error("error marshaling header", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		encheader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
@@ -100,11 +104,11 @@ func (s *Server) handleProxy(e echo.Context) error {
 		// underlying feed generator and the app view passes it on. This allows the
 		// getFeed implementation to pass in the desired lxm and aud for the token
 		// and then just delegate to the general proxying logic
-		lxm, proxyTokenLxmExists := e.Get("proxyTokenLxm").(string)
+		lxm, proxyTokenLxmExists := getContextValue[string](r, contextKeyProxyTokenLxm)
 		if !proxyTokenLxmExists || lxm == "" {
 			lxm = pts[2]
 		}
-		aud, proxyTokenAudExists := e.Get("proxyTokenAud").(string)
+		aud, proxyTokenAudExists := getContextValue[string](r, contextKeyProxyTokenAud)
 		if !proxyTokenAudExists || aud == "" {
 			aud = svcDid
 		}
@@ -118,8 +122,9 @@ func (s *Server) handleProxy(e echo.Context) error {
 		}
 		pj, err := json.Marshal(payload)
 		if err != nil {
-			logger.Error("error marashaling payload", "error", err)
-			return helpers.ServerError(e, nil)
+			logger.Error("error marshaling payload", "error", err)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
@@ -130,12 +135,15 @@ func (s *Server) handleProxy(e echo.Context) error {
 		sk, err := secp256k1secec.NewPrivateKey(repo.SigningKey)
 		if err != nil {
 			logger.Error("can't load private key", "error", err)
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		R, S, _, err := sk.SignRaw(rand.Reader, hash[:])
 		if err != nil {
 			logger.Error("error signing", "error", err)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		rBytes := R.Bytes()
@@ -157,13 +165,14 @@ func (s *Server) handleProxy(e echo.Context) error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		helpers.ServerError(w, nil)
+		return
 	}
 	defer resp.Body.Close()
 
 	for k, v := range resp.Header {
-		e.Response().Header().Set(k, strings.Join(v, ","))
+		w.Header().Set(k, strings.Join(v, ","))
 	}
-
-	return e.Stream(resp.StatusCode, e.Response().Header().Get("content-type"), resp.Body)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }

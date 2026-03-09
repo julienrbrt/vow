@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -13,29 +15,32 @@ import (
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/haileyok/cocoon/plc"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoSubmitPlcOperationRequest struct {
 	Operation plc.Operation `json:"operation"`
 }
 
-func (s *Server) handleSubmitPlcOperation(e echo.Context) error {
+func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleIdentitySubmitPlcOperation")
 
-	repo := e.Get("repo").(*models.RepoActor)
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	var req ComAtprotoSubmitPlcOperationRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
-		return helpers.InputError(e, nil)
+	if err := s.validator.Struct(req); err != nil {
+		helpers.InputError(w, nil)
+		return
 	}
+
 	if !strings.HasPrefix(repo.Repo.Did, "did:plc:") {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	op := req.Operation
@@ -43,34 +48,42 @@ func (s *Server) handleSubmitPlcOperation(e echo.Context) error {
 	k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
 	if err != nil {
 		logger.Error("error parsing key", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 	required, err := s.plcClient.CreateDidCredentials(k, "", repo.Actor.Handle)
 	if err != nil {
-		logger.Error("error crating did credentials", "error", err)
-		return helpers.ServerError(e, nil)
+		logger.Error("error creating did credentials", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	for _, expectedKey := range required.RotationKeys {
 		if !slices.Contains(op.RotationKeys, expectedKey) {
-			return helpers.InputError(e, nil)
+			helpers.InputError(w, nil)
+			return
 		}
 	}
 	if op.Services["atproto_pds"].Type != "AtprotoPersonalDataServer" {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 	if op.Services["atproto_pds"].Endpoint != required.Services["atproto_pds"].Endpoint {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 	if op.VerificationMethods["atproto"] != required.VerificationMethods["atproto"] {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 	if op.AlsoKnownAs[0] != required.AlsoKnownAs[0] {
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
-	if err := s.plcClient.SendOperation(e.Request().Context(), repo.Repo.Did, &op); err != nil {
-		return err
+	if err := s.plcClient.SendOperation(r.Context(), repo.Repo.Did, &op); err != nil {
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.passport.BustDoc(context.TODO(), repo.Repo.Did); err != nil {
@@ -84,6 +97,4 @@ func (s *Server) handleSubmitPlcOperation(e echo.Context) error {
 			Time: time.Now().Format(util.ISO8601),
 		},
 	})
-
-	return nil
 }

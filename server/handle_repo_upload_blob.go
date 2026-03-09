@@ -10,7 +10,6 @@ import (
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 	"github.com/multiformats/go-multihash"
 )
 
@@ -29,13 +28,13 @@ type ComAtprotoRepoUploadBlobResponse struct {
 	} `json:"blob"`
 }
 
-func (s *Server) handleRepoUploadBlob(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleRepoUploadBlob")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	mime := e.Request().Header.Get("content-type")
+	mime := r.Header.Get("content-type")
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
@@ -55,7 +54,8 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 
 	if err := s.db.Create(ctx, &blob, nil).Error; err != nil {
 		logger.Error("error creating new blob in db", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	read := 0
@@ -65,14 +65,15 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 	fulldata := new(bytes.Buffer)
 
 	for {
-		n, err := io.ReadFull(e.Request().Body, buf)
+		n, err := io.ReadFull(r.Body, buf)
 		if err == io.ErrUnexpectedEOF || err == io.EOF {
 			if n == 0 {
 				break
 			}
 		} else if err != nil && err != io.ErrUnexpectedEOF {
 			logger.Error("error reading blob", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		data := buf[:n]
@@ -88,7 +89,8 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 
 			if err := s.db.Create(ctx, &blobPart, nil).Error; err != nil {
 				logger.Error("error adding blob part to db", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 		}
 		part++
@@ -101,14 +103,16 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 	c, err := cid.NewPrefixV1(cid.Raw, multihash.SHA2_256).Sum(fulldata.Bytes())
 	if err != nil {
 		logger.Error("error creating cid prefix", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if ipfsUpload {
 		ipfsCid, err := s.addBlobToIPFS(fulldata.Bytes(), mime)
 		if err != nil {
 			logger.Error("error adding blob to ipfs", "error", err)
-			return helpers.ServerError(e, nil)
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		// Overwrite the locally computed CID with the one returned by the IPFS
@@ -126,7 +130,8 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 
 	if err := s.db.Exec(ctx, "UPDATE blobs SET cid = ? WHERE id = ?", nil, c.Bytes(), blob.ID).Error; err != nil {
 		logger.Error("error updating blob", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	resp := ComAtprotoRepoUploadBlobResponse{}
@@ -135,7 +140,7 @@ func (s *Server) handleRepoUploadBlob(e echo.Context) error {
 	resp.Blob.MimeType = mime
 	resp.Blob.Size = read
 
-	return e.JSON(200, resp)
+	s.writeJSON(w, 200, resp)
 }
 
 // addBlobToIPFS adds raw blob data to the configured IPFS node via the Kubo

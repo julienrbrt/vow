@@ -2,13 +2,13 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
 	"github.com/ipfs/go-cid"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoRepoListMissingBlobsResponse struct {
@@ -21,14 +21,14 @@ type ComAtprotoRepoListMissingBlobsRecordBlob struct {
 	RecordUri string `json:"recordUri"`
 }
 
-func (s *Server) handleListMissingBlobs(e echo.Context) error {
-	ctx := e.Request().Context()
-	logger := s.logger.With("name", "handleListMissingBlos")
+func (s *Server) handleListMissingBlobs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	logger := s.logger.With("name", "handleListMissingBlobs")
 
-	urepo := e.Get("repo").(*models.RepoActor)
+	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	limitStr := e.QueryParam("limit")
-	cursor := e.QueryParam("cursor")
+	limitStr := r.URL.Query().Get("limit")
+	cursor := r.URL.Query().Get("cursor")
 
 	limit := 500
 	if limitStr != "" {
@@ -40,7 +40,8 @@ func (s *Server) handleListMissingBlobs(e echo.Context) error {
 	var records []models.Record
 	if err := s.db.Raw(ctx, "SELECT * FROM records WHERE did = ?", nil, urepo.Repo.Did).Scan(&records).Error; err != nil {
 		logger.Error("failed to get records for listMissingBlobs", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	type blobRef struct {
@@ -95,7 +96,7 @@ func (s *Server) handleListMissingBlobs(e echo.Context) error {
 		nextCursor = &lastCid
 	}
 
-	return e.JSON(200, ComAtprotoRepoListMissingBlobsResponse{
+	s.writeJSON(w, http.StatusOK, ComAtprotoRepoListMissingBlobsResponse{
 		Cursor: nextCursor,
 		Blobs:  missingBlobs,
 	})

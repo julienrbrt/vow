@@ -1,36 +1,42 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerRequestPasswordResetRequest struct {
 	Email string `json:"email" validate:"required"`
 }
 
-func (s *Server) handleServerRequestPasswordReset(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleServerRequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerRequestPasswordReset")
 
-	urepo, ok := e.Get("repo").(*models.RepoActor)
-	if !ok {
+	var urepo *models.RepoActor
+	if repo, ok := getContextValue[*models.RepoActor](r, contextKeyRepo); ok {
+		urepo = repo
+	} else {
 		var req ComAtprotoServerRequestPasswordResetRequest
-		if err := e.Bind(&req); err != nil {
-			return err
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			helpers.ServerError(w, nil)
+			return
 		}
 
-		if err := e.Validate(req); err != nil {
-			return err
+		if err := s.validator.Struct(req); err != nil {
+			helpers.InputError(w, nil)
+			return
 		}
 
 		murepo, err := s.getRepoActorByEmail(ctx, req.Email)
 		if err != nil {
-			return err
+			helpers.ServerError(w, nil)
+			return
 		}
 
 		urepo = murepo
@@ -41,13 +47,15 @@ func (s *Server) handleServerRequestPasswordReset(e echo.Context) error {
 
 	if err := s.db.Exec(ctx, "UPDATE repos SET password_reset_code = ?, password_reset_code_expires_at = ? WHERE did = ?", nil, code, eat, urepo.Repo.Did).Error; err != nil {
 		logger.Error("error updating repo", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
 	if err := s.sendPasswordReset(urepo.Email, urepo.Handle, code); err != nil {
 		logger.Error("error sending email", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.NoContent(200)
+	w.WriteHeader(http.StatusOK)
 }

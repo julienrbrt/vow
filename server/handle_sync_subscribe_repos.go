@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -9,27 +10,26 @@ import (
 	"github.com/bluesky-social/indigo/lex/util"
 	"github.com/btcsuite/websocket"
 	"github.com/haileyok/cocoon/metrics"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleSyncSubscribeRepos(e echo.Context) error {
-	ctx, cancel := context.WithCancel(e.Request().Context())
+func (s *Server) handleSyncSubscribeRepos(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
 	logger := s.logger.With("component", "subscribe-repos-websocket")
 
-	conn, err := websocket.Upgrade(e.Response().Writer, e.Request(), e.Response().Header(), 1<<10, 1<<10)
+	conn, err := websocket.Upgrade(w, r, w.Header(), 1<<10, 1<<10)
 	if err != nil {
 		logger.Error("unable to establish websocket with relay", "err", err)
-		return err
+		return
 	}
 
-	ident := e.RealIP() + "-" + e.Request().UserAgent()
+	ident := r.RemoteAddr + "-" + r.UserAgent()
 	logger = logger.With("ident", ident)
 	logger.Info("new connection established")
 
 	var since *int64
-	if cursorStr := e.QueryParam("cursor"); cursorStr != "" {
+	if cursorStr := r.URL.Query().Get("cursor"); cursorStr != "" {
 		cursor, err := strconv.ParseInt(cursorStr, 10, 64)
 		if err != nil {
 			logger.Warn("invalid cursor parameter", "cursor", cursorStr, "err", err)
@@ -48,7 +48,8 @@ func (s *Server) handleSyncSubscribeRepos(e echo.Context) error {
 		return true
 	}, since)
 	if err != nil {
-		return err
+		logger.Error("error subscribing to event manager", "err", err)
+		return
 	}
 	defer evtManCancel()
 
@@ -134,6 +135,4 @@ func (s *Server) handleSyncSubscribeRepos(e echo.Context) error {
 			logger.Error("error requesting crawls", "err", err)
 		}
 	}()
-
-	return nil
 }

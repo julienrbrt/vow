@@ -1,11 +1,13 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
+
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/google/uuid"
 	"github.com/haileyok/cocoon/internal/helpers"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
 type ComAtprotoServerCreateInviteCodesRequest struct {
@@ -21,19 +23,21 @@ type ComAtprotoServerCreateInviteCodesItem struct {
 	Codes   []string `json:"codes"`
 }
 
-func (s *Server) handleCreateInviteCodes(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleCreateInviteCodes(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerCreateInviteCodes")
 
 	var req ComAtprotoServerCreateInviteCodesRequest
-	if err := e.Bind(&req); err != nil {
-		logger.Error("error binding", "error", err)
-		return helpers.ServerError(e, nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("error decoding", "error", err)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	if err := e.Validate(req); err != nil {
+	if err := s.validator.Struct(req); err != nil {
 		logger.Error("error validating", "error", err)
-		return helpers.InputError(e, nil)
+		helpers.InputError(w, nil)
+		return
 	}
 
 	if req.CodeCount == nil {
@@ -59,7 +63,8 @@ func (s *Server) handleCreateInviteCodes(e echo.Context) error {
 				RemainingUseCount: req.UseCount,
 			}, nil).Error; err != nil {
 				logger.Error("error creating invite code", "error", err)
-				return helpers.ServerError(e, nil)
+				helpers.ServerError(w, nil)
+				return
 			}
 		}
 
@@ -69,5 +74,5 @@ func (s *Server) handleCreateInviteCodes(e echo.Context) error {
 		})
 	}
 
-	return e.JSON(200, codes)
+	s.writeJSON(w, 200, codes)
 }

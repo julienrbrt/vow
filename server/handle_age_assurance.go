@@ -1,15 +1,15 @@
 package server
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/bluesky-social/indigo/util"
 	"github.com/haileyok/cocoon/models"
-	"github.com/labstack/echo/v4"
 )
 
-func (s *Server) handleAgeAssurance(e echo.Context) error {
-	repo := e.Get("repo").(*models.RepoActor)
+func (s *Server) handleAgeAssurance(w http.ResponseWriter, r *http.Request) {
+	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	resp := map[string]any{
 		"state": map[string]any{
@@ -22,5 +22,5 @@ func (s *Server) handleAgeAssurance(e echo.Context) error {
 		},
 	}
 
-	return e.JSON(200, resp)
+	s.writeJSON(w, 200, resp)
 }

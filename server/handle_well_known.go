@@ -2,11 +2,11 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 )
 
@@ -50,8 +50,8 @@ type OauthAuthorizationMetadata struct {
 	ClientIDMetadataDocumentSupported          bool     `json:"client_id_metadata_document_supported"`
 }
 
-func (s *Server) handleWellKnown(e echo.Context) error {
-	return e.JSON(200, map[string]any{
+func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, map[string]any{
 		"@context": []string{
 			"https://www.w3.org/ns/did/v1",
 		},
@@ -66,41 +66,48 @@ func (s *Server) handleWellKnown(e echo.Context) error {
 	})
 }
 
-func (s *Server) handleAtprotoDid(e echo.Context) error {
-	ctx := e.Request().Context()
+func (s *Server) handleAtprotoDid(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleAtprotoDid")
 
-	host := e.Request().Host
+	host := r.Host
 	if host == "" {
-		return helpers.InputError(e, to.StringPtr("Invalid handle."))
+		helpers.InputError(w, to.StringPtr("Invalid handle."))
+		return
 	}
 
 	host = strings.Split(host, ":")[0]
 	host = strings.ToLower(strings.TrimSpace(host))
 
 	if host == s.config.Hostname {
-		return e.String(200, s.config.Did)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, s.config.Did)
+		return
 	}
 
 	suffix := "." + s.config.Hostname
 	if !strings.HasSuffix(host, suffix) {
-		return e.NoContent(404)
+		w.WriteHeader(http.StatusNotFound)
+		return
 	}
 
 	actor, err := s.getActorByHandle(ctx, host)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return e.NoContent(404)
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
 		logger.Error("error looking up actor by handle", "error", err)
-		return helpers.ServerError(e, nil)
+		helpers.ServerError(w, nil)
+		return
 	}
 
-	return e.String(200, actor.Did)
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprint(w, actor.Did)
 }
 
-func (s *Server) handleOauthProtectedResource(e echo.Context) error {
-	return e.JSON(200, map[string]any{
+func (s *Server) handleOauthProtectedResource(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, map[string]any{
 		"resource": "https://" + s.config.Hostname,
 		"authorization_servers": []string{
 			"https://" + s.config.Hostname,
@@ -111,8 +118,8 @@ func (s *Server) handleOauthProtectedResource(e echo.Context) error {
 	})
 }
 
-func (s *Server) handleOauthAuthorizationServer(e echo.Context) error {
-	return e.JSON(200, OauthAuthorizationMetadata{
+func (s *Server) handleOauthAuthorizationServer(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, 200, OauthAuthorizationMetadata{
 		Issuer:                                     "https://" + s.config.Hostname,
 		RequestParameterSupported:                  true,
 		RequestUriParameterSupported:               true,
@@ -125,7 +132,7 @@ func (s *Server) handleOauthAuthorizationServer(e echo.Context) error {
 		CodeChallengeMethodsSupported:              []string{"S256"},
 		UILocalesSupported:                         []string{"en-US"},
 		DisplayValuesSupported:                     []string{"page", "popup", "touch"},
-		RequestObjectSigningAlgValuesSupported:     []string{"ES256"}, // only es256 for now...
+		RequestObjectSigningAlgValuesSupported:     []string{"ES256"},
 		AuthorizationResponseISSParameterSupported: true,
 		RequestObjectEncryptionAlgValuesSupported:  []string{},
 		RequestObjectEncryptionEncValuesSupported:  []string{},
@@ -133,12 +140,12 @@ func (s *Server) handleOauthAuthorizationServer(e echo.Context) error {
 		AuthorizationEndpoint:             fmt.Sprintf("https://%s/oauth/authorize", s.config.Hostname),
 		TokenEndpoint:                     fmt.Sprintf("https://%s/oauth/token", s.config.Hostname),
 		TokenEndpointAuthMethodsSupported: []string{"none", "private_key_jwt"},
-		TokenEndpointAuthSigningAlgValuesSupported: []string{"ES256"}, // Same as above, just es256
+		TokenEndpointAuthSigningAlgValuesSupported: []string{"ES256"},
 		RevocationEndpoint:                         fmt.Sprintf("https://%s/oauth/revoke", s.config.Hostname),
 		IntrospectionEndpoint:                      fmt.Sprintf("https://%s/oauth/introspect", s.config.Hostname),
 		PushedAuthorizationRequestEndpoint:         fmt.Sprintf("https://%s/oauth/par", s.config.Hostname),
 		RequirePushedAuthorizationRequests:         true,
-		DpopSigningAlgValuesSupported:              []string{"ES256"}, // again same as above
+		DpopSigningAlgValuesSupported:              []string{"ES256"},
 		ProtectedResources:                         []string{"https://" + s.config.Hostname},
 		ClientIDMetadataDocumentSupported:          true,
 	})
