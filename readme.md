@@ -188,7 +188,7 @@ docker compose up -d
 - [x] `com.atproto.server.deleteAccount`
 - [x] `com.atproto.server.deleteSession`
 - [x] `com.atproto.server.describeServer`
-- [ ] `com.atproto.server.getAccountInviteCodes`
+- [x] `com.atproto.server.getAccountInviteCodes`
 - [x] `com.atproto.server.getServiceAuth`
 - [x] `com.atproto.server.refreshSession`
 - [x] `com.atproto.server.requestAccountDelete`

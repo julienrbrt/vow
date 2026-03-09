@@ -290,6 +290,14 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			helpers.ServerError(w, nil)
 			return
 		}
+
+		if err := s.db.Create(ctx, &models.InviteCodeUse{
+			Code:   request.InviteCode,
+			UsedBy: signupDid,
+			UsedAt: time.Now(),
+		}, nil).Error; err != nil {
+			logger.Error("error recording invite code use", "error", err)
+		}
 	}
 
 	sess, err := s.createSession(ctx, &urepo)

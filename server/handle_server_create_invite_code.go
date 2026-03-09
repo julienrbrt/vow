@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -48,6 +49,7 @@ func (s *Server) handleCreateInviteCode(w http.ResponseWriter, r *http.Request) 
 		Code:              ic,
 		Did:               acc,
 		RemainingUseCount: req.UseCount,
+		CreatedAt:         time.Now(),
 	}, nil).Error; err != nil {
 		logger.Error("error creating invite code", "error", err)
 		helpers.ServerError(w, nil)

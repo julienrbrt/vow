@@ -554,6 +554,7 @@ func (s *Server) addRoutes() {
 	r.Post("/xrpc/com.atproto.server.requestEmailUpdate", authed(s.handleServerRequestEmailUpdate).ServeHTTP)
 	r.Post("/xrpc/com.atproto.server.resetPassword", authed(s.handleServerResetPassword).ServeHTTP)
 	r.Post("/xrpc/com.atproto.server.updateEmail", authed(s.handleServerUpdateEmail).ServeHTTP)
+	r.Get("/xrpc/com.atproto.server.getAccountInviteCodes", authed(s.handleGetAccountInviteCodes).ServeHTTP)
 	r.Get("/xrpc/com.atproto.server.getServiceAuth", authed(s.handleServerGetServiceAuth).ServeHTTP)
 	r.Get("/xrpc/com.atproto.server.checkAccountStatus", authed(s.handleServerCheckAccountStatus).ServeHTTP)
 	r.Post("/xrpc/com.atproto.server.deactivateAccount", authed(s.handleServerDeactivateAccount).ServeHTTP)
@@ -596,6 +597,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		&models.Actor{},
 		&models.Repo{},
 		&models.InviteCode{},
+		&models.InviteCodeUse{},
 		&models.Token{},
 		&models.RefreshToken{},
 		&models.Block{},

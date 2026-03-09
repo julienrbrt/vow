@@ -80,6 +80,15 @@ type InviteCode struct {
 	Code              string `gorm:"primaryKey"`
 	Did               string `gorm:"index"`
 	RemainingUseCount int
+	CreatedAt         time.Time
+	Disabled          bool `gorm:"default:false"`
+}
+
+type InviteCodeUse struct {
+	ID     uint   `gorm:"primaryKey"`
+	Code   string `gorm:"index"`
+	UsedBy string
+	UsedAt time.Time
 }
 
 type Token struct {
