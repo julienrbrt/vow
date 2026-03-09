@@ -2,11 +2,11 @@
 set -e
 
 mkdir -p /keys
-mkdir -p /data/cocoon
+mkdir -p /data/vow
 
 if [ ! -f /keys/rotation.key ]; then
     echo "Generating rotation key..."
-    /cocoon create-rotation-key --out /keys/rotation.key 2>/dev/null || true
+    /vow create-rotation-key --out /keys/rotation.key 2>/dev/null || true
     if [ -f /keys/rotation.key ]; then
         echo "✓ Rotation key generated at /keys/rotation.key"
     else
@@ -19,7 +19,7 @@ fi
 
 if [ ! -f /keys/jwk.key ]; then
     echo "Generating JWK..."
-    /cocoon create-private-jwk --out /keys/jwk.key 2>/dev/null || true
+    /vow create-private-jwk --out /keys/jwk.key 2>/dev/null || true
     if [ -f /keys/jwk.key ]; then
         echo "✓ JWK generated at /keys/jwk.key"
     else

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/haileyok/cocoon/sqlite_blockstore"
+	"pkg.rbrt.fr/vow/sqlite_blockstore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 )
 

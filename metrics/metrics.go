@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	NAMESPACE = "cocoon"
+	NAMESPACE = "vow"
 )
 
 var (

@@ -10,7 +10,7 @@ import (
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"golang.org/x/crypto/bcrypt"
 )
 

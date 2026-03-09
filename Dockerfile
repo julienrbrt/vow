@@ -6,7 +6,7 @@ WORKDIR /dockerbuild
 
 RUN GIT_VERSION=$(git describe --tags --long --always || echo "dev-local") && \
     go mod tidy && \
-    go build -ldflags "-X main.Version=$GIT_VERSION" -o cocoon ./cmd/cocoon
+    go build -ldflags "-X main.Version=$GIT_VERSION" -o vow ./cmd/vow
 
 ### Run stage
 FROM debian:bookworm-slim AS run
@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y dumb-init runit ca-certificates curl &&
 ENTRYPOINT ["dumb-init", "--"]
 
 WORKDIR /
-RUN mkdir -p data/cocoon
-COPY --from=build-env /dockerbuild/cocoon /
+RUN mkdir -p data/vow
+COPY --from=build-env /dockerbuild/vow /
 
-CMD ["/cocoon", "run"]
+CMD ["/vow", "run"]
 
-LABEL org.opencontainers.image.source=https://github.com/haileyok/cocoon
-LABEL org.opencontainers.image.description="Cocoon ATProto PDS"
+LABEL org.opencontainers.image.source=https://pkg.rbrt.fr/vow
+LABEL org.opencontainers.image.description="Vow ATProto PDS"
 LABEL org.opencontainers.image.licenses=MIT

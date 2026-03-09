@@ -7,8 +7,8 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 	"github.com/ipfs/go-cid"
 	"github.com/multiformats/go-multihash"
 )

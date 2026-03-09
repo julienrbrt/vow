@@ -1,8 +1,8 @@
 package provider
 
 import (
-	"github.com/haileyok/cocoon/oauth/client"
-	"github.com/haileyok/cocoon/oauth/dpop"
+	"pkg.rbrt.fr/vow/oauth/client"
+	"pkg.rbrt.fr/vow/oauth/dpop"
 )
 
 type Provider struct {

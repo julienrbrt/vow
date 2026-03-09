@@ -1,6 +1,6 @@
 *.db
 .env
-/cocoon
+/vow
 *.key
 *.secret
 .DS_Store

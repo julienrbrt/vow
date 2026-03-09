@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/util"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 )
 
 func (s *Server) handleAgeAssurance(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type Session struct {

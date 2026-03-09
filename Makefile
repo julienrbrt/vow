@@ -29,7 +29,7 @@ help: ## Print info about all commands
 
 .PHONY: build
 build: ## Build all executables
-	go build -ldflags "-X main.Version=$(VERSION)" -o cocoon ./cmd/cocoon
+	go build -ldflags "-X main.Version=$(VERSION)" -o vow ./cmd/vow
 
 .PHONY: build-release
 build-all: ## Build binaries for all architectures
@@ -39,9 +39,9 @@ build-all: ## Build binaries for all architectures
 		$(eval OS := $(word 1,$(subst /, ,$(platform)))) \
 		$(eval ARCH := $(word 2,$(subst /, ,$(platform)))) \
 		$(eval EXT := $(if $(filter windows,$(OS)),.exe,)) \
-		$(eval OUTPUT := $(BUILD_DIR)/cocoon-$(VERSION)-$(OS)-$(ARCH)$(EXT)) \
+		$(eval OUTPUT := $(BUILD_DIR)/vow-$(VERSION)-$(OS)-$(ARCH)$(EXT)) \
 		echo "Building $(OS)/$(ARCH)..."; \
-		GOOS=$(OS) GOARCH=$(ARCH) go build -ldflags "-X main.Version=$(VERSION)" -o $(OUTPUT) ./cmd/cocoon && \
+		GOOS=$(OS) GOARCH=$(ARCH) go build -ldflags "-X main.Version=$(VERSION)" -o $(OUTPUT) ./cmd/vow && \
 		echo "  ✓ $(OUTPUT)" || echo "  ✗ Failed: $(OS)/$(ARCH)"; \
 	)
 	@echo "Done! Binaries are in $(BUILD_DIR)/"
@@ -52,7 +52,7 @@ clean-dist: ## Remove all built binaries
 
 .PHONY: run
 run:
-	go build -ldflags "-X main.Version=dev-local" -o cocoon ./cmd/cocoon && ./cocoon run
+	go build -ldflags "-X main.Version=dev-local" -o vow ./cmd/vow && ./vow run
 
 .PHONY: all
 all: build
@@ -79,4 +79,4 @@ check: ## Compile everything, checking syntax (does not output binaries)
 
 .PHONY: docker-build
 docker-build:
-	docker build -t cocoon .
+	docker build -t vow .

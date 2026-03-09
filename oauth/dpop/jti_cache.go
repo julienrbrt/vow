@@ -5,7 +5,7 @@ import (
 	"time"
 
 	cache "github.com/go-pkgz/expirable-cache/v3"
-	"github.com/haileyok/cocoon/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/constants"
 )
 
 type jtiCache struct {

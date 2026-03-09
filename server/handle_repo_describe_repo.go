@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/haileyok/cocoon/identity"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/models"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/identity"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoRepoDescribeRepoResponse struct {
@@ -47,8 +47,8 @@ func (s *Server) handleDescribeRepo(w http.ResponseWriter, r *http.Request) {
 
 	dochandle := ""
 	for _, aka := range diddoc.AlsoKnownAs {
-		if strings.HasPrefix(aka, "at://") {
-			dochandle = strings.TrimPrefix(aka, "at://")
+		if after, ok := strings.CutPrefix(aka, "at://"); ok {
+			dochandle = after
 			break
 		}
 	}

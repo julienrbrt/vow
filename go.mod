@@ -1,4 +1,4 @@
-module github.com/haileyok/cocoon
+module pkg.rbrt.fr/vow
 
 go 1.25
 

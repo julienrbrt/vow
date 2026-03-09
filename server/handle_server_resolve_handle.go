@@ -6,7 +6,7 @@ import (
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 func (s *Server) handleResolveHandle(w http.ResponseWriter, r *http.Request) {

@@ -17,8 +17,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/glebarez/sqlite"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/server"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -37,7 +37,7 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:           "cocoon",
+	Use:           "vow",
 	Short:         "An atproto PDS",
 	Version:       Version,
 	SilenceErrors: true,
@@ -48,7 +48,7 @@ func init() {
 	pf := rootCmd.PersistentFlags()
 
 	pf.String(flagAddr, ":8080", "Listen address")
-	pf.String(flagDbName, "cocoon.db", "SQLite database file path")
+	pf.String(flagDbName, "vow.db", "SQLite database file path")
 	pf.String(flagDid, "", "DID of this PDS")
 	pf.String(flagHostname, "", "Public hostname of this PDS")
 	pf.String(flagRotationKeyPath, "", "Path to the rotation key file")
@@ -77,11 +77,11 @@ func init() {
 	pf.String(flagMetricsListenAddress, "0.0.0.0:6009", "Listen address for the Prometheus metrics / pprof endpoint")
 
 	v := viper.New()
-	v.SetEnvPrefix("COCOON")
+	v.SetEnvPrefix("VOW")
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 	_ = v.BindEnv(flagDebug, "DEBUG")
-	_ = v.BindEnv(flagLogLevel, "COCOON_LOG_LEVEL", "LOG_LEVEL")
+	_ = v.BindEnv(flagLogLevel, "VOW_LOG_LEVEL", "LOG_LEVEL")
 	_ = v.BindEnv(flagMetricsListenAddress, "METRICS_LISTEN_ADDRESS")
 	_ = v.BindPFlags(pf)
 
@@ -140,7 +140,7 @@ func startMetrics(v *viper.Viper) {
 func newDb(v *viper.Viper) (*gorm.DB, error) {
 	dbName := v.GetString(flagDbName)
 	if dbName == "" {
-		dbName = "cocoon.db"
+		dbName = "vow.db"
 	}
 	return gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 }
@@ -148,7 +148,7 @@ func newDb(v *viper.Viper) (*gorm.DB, error) {
 func newServeCmd(v *viper.Viper) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run",
-		Short: "Start the cocoon PDS",
+		Short: "Start the vow PDS",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logger := buildLogger(v)
 			startMetrics(v)
@@ -185,11 +185,11 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 				FallbackProxy:     v.GetString(flagFallbackProxy),
 			})
 			if err != nil {
-				return fmt.Errorf("error creating cocoon: %w", err)
+				return fmt.Errorf("error creating vow: %w", err)
 			}
 
 			if err := s.Serve(context.Background()); err != nil {
-				return fmt.Errorf("error starting cocoon: %w", err)
+				return fmt.Errorf("error starting vow: %w", err)
 			}
 
 			return nil

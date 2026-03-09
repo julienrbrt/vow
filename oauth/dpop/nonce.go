@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/oauth/constants"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/oauth/constants"
 )
 
 type Nonce struct {

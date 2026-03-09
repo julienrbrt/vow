@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/haileyok/cocoon/oauth"
-	"github.com/haileyok/cocoon/oauth/constants"
-	"github.com/haileyok/cocoon/oauth/provider"
+	"pkg.rbrt.fr/vow/oauth"
+	"pkg.rbrt.fr/vow/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/provider"
 	"github.com/hako/durafmt"
 )
 

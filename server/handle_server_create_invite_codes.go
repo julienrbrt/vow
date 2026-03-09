@@ -6,8 +6,8 @@ import (
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/google/uuid"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoServerCreateInviteCodesRequest struct {

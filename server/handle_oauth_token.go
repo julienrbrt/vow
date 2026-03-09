@@ -12,11 +12,11 @@ import (
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/oauth"
-	"github.com/haileyok/cocoon/oauth/constants"
-	"github.com/haileyok/cocoon/oauth/dpop"
-	"github.com/haileyok/cocoon/oauth/provider"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/oauth"
+	"pkg.rbrt.fr/vow/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/dpop"
+	"pkg.rbrt.fr/vow/oauth/provider"
 )
 
 type OauthTokenRequest struct {

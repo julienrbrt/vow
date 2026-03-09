@@ -9,7 +9,7 @@ import (
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/lex/util"
 	"github.com/btcsuite/websocket"
-	"github.com/haileyok/cocoon/metrics"
+	"pkg.rbrt.fr/vow/metrics"
 )
 
 func (s *Server) handleSyncSubscribeRepos(w http.ResponseWriter, r *http.Request) {

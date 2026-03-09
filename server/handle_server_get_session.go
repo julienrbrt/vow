@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoServerGetSessionResponse struct {

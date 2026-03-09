@@ -1,79 +1,68 @@
-# Cocoon
+# Vow
 
 > [!WARNING]
-I migrated and have been running my main account on this PDS for months now without issue, however, I am still not responsible if things go awry, particularly during account migration. Please use caution.
+> This is highly experimental software. Use with caution, especially during account migration.
 
-Cocoon is a PDS implementation in Go. It is highly experimental, and is not ready for any production use.
+Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
 
 ## Quick Start with Docker Compose
 
 ### Prerequisites
 
 - Docker and Docker Compose installed
-- A domain name pointing to your server (for automatic HTTPS)
-- Ports 80 and 443 open in i.e. UFW
+- A domain name pointing to your server
+- Ports 80 and 443 open
 
 ### Installation
 
 1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/haileyok/cocoon.git
-   cd cocoon
+   git clone https://pkg.rbrt.fr/vow.git
+   cd vow
    ```
 
 2. **Create your configuration file**
+
    ```bash
    cp .env.example .env
    ```
 
 3. **Edit `.env` with your settings**
 
-   Required settings:
    ```bash
-   COCOON_DID="did:web:your-domain.com"
-   COCOON_HOSTNAME="your-domain.com"
-   COCOON_CONTACT_EMAIL="you@example.com"
-   COCOON_RELAYS="https://bsky.network"
+   VOW_DID="did:web:your-domain.com"
+   VOW_HOSTNAME="your-domain.com"
+   VOW_CONTACT_EMAIL="you@example.com"
+   VOW_RELAYS="https://bsky.network"
 
    # Generate with: openssl rand -hex 16
-   COCOON_ADMIN_PASSWORD="your-secure-password"
+   VOW_ADMIN_PASSWORD="your-secure-password"
 
    # Generate with: openssl rand -hex 32
-   COCOON_SESSION_SECRET="your-session-secret"
+   VOW_SESSION_SECRET="your-session-secret"
    ```
 
 4. **Start the services**
+
    ```bash
-   # Pull pre-built image from GitHub Container Registry
    docker-compose pull
    docker-compose up -d
-   ```
-
-   Or build locally:
-   ```bash
-   docker-compose build
-   docker-compose up -d
-   ```
-
-   **For PostgreSQL deployment:**
-   ```bash
-   # Add POSTGRES_PASSWORD to your .env file first!
-   docker-compose -f docker-compose.postgres.yaml up -d
    ```
 
 5. **Get your invite code**
 
    On first run, an invite code is automatically created. View it with:
+
    ```bash
    docker-compose logs create-invite
    ```
 
    Or check the saved file:
+
    ```bash
    cat keys/initial-invite-code.txt
    ```
-
-   **IMPORTANT**: Save this invite code! You'll need it to create your first account.
 
 6. **Monitor the services**
    ```bash
@@ -82,107 +71,72 @@ Cocoon is a PDS implementation in Go. It is highly experimental, and is not read
 
 ### What Gets Set Up
 
-The Docker Compose setup includes:
-
-- **init-keys**: Automatically generates cryptographic keys (rotation key and JWK) on first run
-- **cocoon**: The main PDS service running on port 8080
-- **create-invite**: Automatically creates an initial invite code after Cocoon starts (first run only)
-- **caddy**: Reverse proxy with automatic HTTPS via Let's Encrypt
+- **init-keys**: Generates cryptographic keys (rotation key and JWK) on first run
+- **vow**: The main PDS service running on port 8080
+- **create-invite**: Creates an initial invite code on first run
 
 ### Data Persistence
 
-The following directories will be created automatically:
+- `./keys/` — Cryptographic keys (generated automatically)
+  - `rotation.key` — PDS rotation key
+  - `jwk.key` — JWK private key
+  - `initial-invite-code.txt` — Your first invite code (first run only)
+- `./data/` — SQLite database and blockstore
 
-- `./keys/` - Cryptographic keys (generated automatically)
-  - `rotation.key` - PDS rotation key
-  - `jwk.key` - JWK private key
-  - `initial-invite-code.txt` - Your first invite code (first run only)
-- `./data/` - SQLite database and blockstore
-- Docker volumes for Caddy configuration and certificates
+## Configuration
 
-### Optional Configuration
+### Database
 
-#### Database Configuration
-
-By default, Cocoon uses SQLite which requires no additional setup. For production deployments with higher traffic, you can use PostgreSQL:
+Vow uses SQLite by default. No additional setup required.
 
 ```bash
-# Database type: sqlite (default) or postgres
-COCOON_DB_TYPE="postgres"
-
-# PostgreSQL connection string (required if db-type is postgres)
-# Format: postgres://user:password@host:port/database?sslmode=disable
-COCOON_DATABASE_URL="postgres://cocoon:password@localhost:5432/cocoon?sslmode=disable"
-
-# Or use the standard DATABASE_URL environment variable
-DATABASE_URL="postgres://cocoon:password@localhost:5432/cocoon?sslmode=disable"
+VOW_DB_NAME="/data/vow/vow.db"
 ```
 
-For SQLite (default):
-```bash
-COCOON_DB_TYPE="sqlite"
-COCOON_DB_NAME="/data/cocoon/cocoon.db"
-```
-
-> **Note**: When using PostgreSQL, database backups to S3 are not handled by Cocoon. Use `pg_dump` or your database provider's backup solution instead.
-
-#### SMTP Email Settings
-```bash
-COCOON_SMTP_USER="your-smtp-username"
-COCOON_SMTP_PASS="your-smtp-password"
-COCOON_SMTP_HOST="smtp.example.com"
-COCOON_SMTP_PORT="587"
-COCOON_SMTP_EMAIL="noreply@example.com"
-COCOON_SMTP_NAME="Cocoon PDS"
-```
-
-#### S3 Storage
-
-Cocoon supports S3-compatible storage for both database backups (SQLite only) and blob storage (images, videos, etc.):
+### SMTP Email
 
 ```bash
-# Enable S3 backups (SQLite databases only - hourly backups)
-COCOON_S3_BACKUPS_ENABLED=true
-
-# Enable S3 for blob storage (images, videos, etc.)
-# When enabled, blobs are stored in S3 instead of the database
-COCOON_S3_BLOBSTORE_ENABLED=true
-
-# S3 configuration (works with AWS S3, MinIO, Cloudflare R2, etc.)
-COCOON_S3_REGION="us-east-1"
-COCOON_S3_BUCKET="your-bucket"
-COCOON_S3_ENDPOINT="https://s3.amazonaws.com"
-COCOON_S3_ACCESS_KEY="your-access-key"
-COCOON_S3_SECRET_KEY="your-secret-key"
-
-# Optional: CDN/public URL for blob redirects
-# When set, com.atproto.sync.getBlob redirects to this URL instead of proxying
-COCOON_S3_CDN_URL="https://cdn.example.com"
+VOW_SMTP_USER="your-smtp-username"
+VOW_SMTP_PASS="your-smtp-password"
+VOW_SMTP_HOST="smtp.example.com"
+VOW_SMTP_PORT="587"
+VOW_SMTP_EMAIL="noreply@example.com"
+VOW_SMTP_NAME="Vow PDS"
 ```
 
-**Blob Storage Options:**
-- `COCOON_S3_BLOBSTORE_ENABLED=false` (default): Blobs stored in the database
-- `COCOON_S3_BLOBSTORE_ENABLED=true`: Blobs stored in S3 bucket under `blobs/{did}/{cid}`
+### IPFS Blob Storage
 
-**Blob Serving Options:**
-- Without `COCOON_S3_CDN_URL`: Blobs are proxied through the PDS server
-- With `COCOON_S3_CDN_URL`: `getBlob` returns a 302 redirect to `{CDN_URL}/blobs/{did}/{cid}`
+By default blobs are stored in SQLite. Optionally, blobs can be stored on IPFS via a local [Kubo](https://github.com/ipfs/kubo) node:
 
-> **Tip**: For Cloudflare R2, you can use the public bucket URL as the CDN URL. For AWS S3, you can use CloudFront or the S3 bucket URL directly if public access is enabled.
+```bash
+VOW_IPFS_BLOBSTORE_ENABLED=true
 
-### Management Commands
+# URL of the local Kubo RPC API (default: http://127.0.0.1:5001)
+VOW_IPFS_NODE_URL="http://127.0.0.1:5001"
+
+# Optional: redirect getBlob to a public gateway instead of proxying
+VOW_IPFS_GATEWAY_URL="https://ipfs.io"
+
+# Optional: remote pinning service
+VOW_IPFS_PINNING_SERVICE_URL="https://api.pinata.cloud/psa"
+VOW_IPFS_PINNING_SERVICE_TOKEN="your-token"
+```
+
+## Management Commands
 
 Create an invite code:
+
 ```bash
-docker exec cocoon-pds /cocoon create-invite-code --uses 1
+docker exec vow-pds /vow create-invite-code --uses 1
 ```
 
 Reset a user's password:
+
 ```bash
-docker exec cocoon-pds /cocoon reset-password --did "did:plc:xxx"
+docker exec vow-pds /vow reset-password --did "did:plc:xxx"
 ```
 
-### Updating
+## Updating
 
 ```bash
 docker-compose pull
@@ -192,7 +146,7 @@ docker-compose up -d
 ## Implemented Endpoints
 
 > [!NOTE]
-Just because something is implemented doesn't mean it is finished. Tons of these are returning bad errors, don't do validation properly, etc. I'll make a "second pass" checklist at some point to do all of that.
+> Just because something is implemented doesn't mean it is finished. Many endpoints still have rough edges around validation and error handling.
 
 ### Identity
 
@@ -229,7 +183,6 @@ Just because something is implemented doesn't mean it is finished. Tons of these
 - [x] `com.atproto.server.describeServer`
 - [ ] `com.atproto.server.getAccountInviteCodes`
 - [x] `com.atproto.server.getServiceAuth`
-- ~~[ ] `com.atproto.server.listAppPasswords`~~ - not going to add app passwords
 - [x] `com.atproto.server.refreshSession`
 - [x] `com.atproto.server.requestAccountDelete`
 - [x] `com.atproto.server.requestEmailConfirmation`
@@ -237,7 +190,6 @@ Just because something is implemented doesn't mean it is finished. Tons of these
 - [x] `com.atproto.server.requestPasswordReset`
 - [x] `com.atproto.server.reserveSigningKey`
 - [x] `com.atproto.server.resetPassword`
-- ~~[] `com.atproto.server.revokeAppPassword`~~ - not going to add app passwords
 - [x] `com.atproto.server.updateEmail`
 
 ### Sync
@@ -250,17 +202,16 @@ Just because something is implemented doesn't mean it is finished. Tons of these
 - [x] `com.atproto.sync.getRepo`
 - [x] `com.atproto.sync.listBlobs`
 - [x] `com.atproto.sync.listRepos`
-- ~~[ ] `com.atproto.sync.notifyOfUpdate`~~ - BGS doesn't even have this implemented lol
 - [x] `com.atproto.sync.requestCrawl`
 - [x] `com.atproto.sync.subscribeRepos`
 
 ### Other
 
 - [x] `com.atproto.label.queryLabels`
-- [x] `com.atproto.moderation.createReport` (Note: this should be handled by proxying, not actually implemented in the PDS)
+- [x] `com.atproto.moderation.createReport`
 - [x] `app.bsky.actor.getPreferences`
 - [x] `app.bsky.actor.putPreferences`
 
 ## License
 
-This project is licensed under MIT license. `server/static/pico.css` is also licensed under MIT license, available at [https://github.com/picocss/pico/](https://github.com/picocss/pico/).
+MIT. `server/static/pico.css` is also MIT licensed, available at [https://github.com/picocss/pico/](https://github.com/picocss/pico/).

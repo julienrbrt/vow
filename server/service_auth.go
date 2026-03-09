@@ -20,7 +20,7 @@ func (m *ES256KSigningMethod) Alg() string {
 	return m.alg
 }
 
-func (m *ES256KSigningMethod) Verify(signingString string, signature string, key interface{}) error {
+func (m *ES256KSigningMethod) Verify(signingString string, signature string, key any) error {
 	signatureBytes, err := jwt.DecodeSegment(signature)
 	if err != nil {
 		return err
@@ -28,7 +28,7 @@ func (m *ES256KSigningMethod) Verify(signingString string, signature string, key
 	return key.(atcrypto.PublicKey).HashAndVerifyLenient([]byte(signingString), signatureBytes)
 }
 
-func (m *ES256KSigningMethod) Sign(signingString string, key interface{}) (string, error) {
+func (m *ES256KSigningMethod) Sign(signingString string, key any) (string, error) {
 	return "", fmt.Errorf("unimplemented")
 }
 
@@ -42,7 +42,7 @@ func init() {
 func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid string) (string, error) {
 	token := strings.TrimSpace(rawToken)
 
-	parsedToken, err := jwt.ParseWithClaims(token, jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+	parsedToken, err := jwt.ParseWithClaims(token, jwt.MapClaims{}, func(token *jwt.Token) (any, error) {
 		did := syntax.DID(token.Claims.(jwt.MapClaims)["iss"].(string))
 		didDoc, err := s.passport.FetchDoc(ctx, did.String())
 		if err != nil {

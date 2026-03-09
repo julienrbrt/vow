@@ -15,7 +15,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/util"
-	"github.com/haileyok/cocoon/identity"
+	"pkg.rbrt.fr/vow/identity"
 )
 
 type Client struct {

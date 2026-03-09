@@ -9,10 +9,10 @@ import (
 
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
-	"github.com/haileyok/cocoon/identity"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/models"
-	"github.com/haileyok/cocoon/plc"
+	"pkg.rbrt.fr/vow/identity"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
+	"pkg.rbrt.fr/vow/plc"
 )
 
 type ComAtprotoSignPlcOperationRequest struct {

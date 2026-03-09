@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
-	"github.com/haileyok/cocoon/identity"
+	"pkg.rbrt.fr/vow/identity"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 

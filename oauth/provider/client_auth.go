@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/haileyok/cocoon/oauth/client"
-	"github.com/haileyok/cocoon/oauth/constants"
-	"github.com/haileyok/cocoon/oauth/dpop"
+	"pkg.rbrt.fr/vow/oauth/client"
+	"pkg.rbrt.fr/vow/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/dpop"
 )
 
 type AuthenticateClientOptions struct {

@@ -9,7 +9,7 @@ import (
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 func (s *Server) handleProxyBskyFeedGetFeed(w http.ResponseWriter, r *http.Request) {

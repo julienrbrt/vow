@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/oauth"
-	"github.com/haileyok/cocoon/oauth/constants"
-	"github.com/haileyok/cocoon/oauth/provider"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/oauth"
+	"pkg.rbrt.fr/vow/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/provider"
 )
 
 type HandleOauthAuthorizeGetInput struct {
@@ -64,7 +64,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 				s.renderTemplate(w, "authorize.html", map[string]any{
 					"Scopes":     []string{"atproto", "transition:generic"},
 					"AppName":    "DEV MODE AUTHORIZATION PAGE",
-					"Handle":     "paula.cocoon.social",
+					"Handle":     "paula.rbrt.fr",
 					"RequestUri": "",
 				})
 				return

@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 type AccountRevokeInput struct {

@@ -6,12 +6,12 @@ import (
 	"strings"
 
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"gorm.io/gorm"
 )
 
 var (
-	CocoonSupportedScopes = []string{
+	VowSupportedScopes = []string{
 		"atproto",
 		"transition:email",
 		"transition:generic",
@@ -124,7 +124,7 @@ func (s *Server) handleOauthAuthorizationServer(w http.ResponseWriter, r *http.R
 		RequestParameterSupported:                  true,
 		RequestUriParameterSupported:               true,
 		RequireRequestUriRegistration:              to.BoolPtr(true),
-		ScopesSupported:                            CocoonSupportedScopes,
+		ScopesSupported:                            VowSupportedScopes,
 		SubjectTypesSupported:                      []string{"public"},
 		ResponseTypesSupported:                     []string{"code"},
 		ResponseModesSupported:                     []string{"query", "fragment", "form_post"},

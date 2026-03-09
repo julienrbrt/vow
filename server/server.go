@@ -28,15 +28,15 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-playground/validator"
 	"github.com/gorilla/sessions"
-	"github.com/haileyok/cocoon/identity"
-	"github.com/haileyok/cocoon/internal/db"
-	"github.com/haileyok/cocoon/internal/helpers"
-	"github.com/haileyok/cocoon/models"
-	"github.com/haileyok/cocoon/oauth/client"
-	"github.com/haileyok/cocoon/oauth/constants"
-	"github.com/haileyok/cocoon/oauth/dpop"
-	"github.com/haileyok/cocoon/oauth/provider"
-	"github.com/haileyok/cocoon/plc"
+	"pkg.rbrt.fr/vow/identity"
+	"pkg.rbrt.fr/vow/internal/db"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
+	"pkg.rbrt.fr/vow/oauth/client"
+	"pkg.rbrt.fr/vow/oauth/constants"
+	"pkg.rbrt.fr/vow/oauth/dpop"
+	"pkg.rbrt.fr/vow/oauth/provider"
+	"pkg.rbrt.fr/vow/plc"
 	"github.com/ipfs/go-cid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -251,19 +251,19 @@ func New(args *Args) (*Server, error) {
 	}
 
 	if args.Did == "" {
-		return nil, fmt.Errorf("cocoon did must be set")
+		return nil, fmt.Errorf("vow did must be set")
 	}
 
 	if args.ContactEmail == "" {
-		return nil, fmt.Errorf("cocoon contact email is required")
+		return nil, fmt.Errorf("vow contact email is required")
 	}
 
 	if _, err := syntax.ParseDID(args.Did); err != nil {
-		return nil, fmt.Errorf("error parsing cocoon did: %w", err)
+		return nil, fmt.Errorf("error parsing vow did: %w", err)
 	}
 
 	if args.Hostname == "" {
-		return nil, fmt.Errorf("cocoon hostname must be set")
+		return nil, fmt.Errorf("vow hostname must be set")
 	}
 
 	if args.AdminPassword == "" {
@@ -602,7 +602,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		&provider.OauthAuthorizationRequest{},
 	)
 
-	logger.Info("starting cocoon")
+	logger.Info("starting vow")
 
 	go func() {
 		if err := s.httpd.ListenAndServe(); err != nil {

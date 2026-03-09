@@ -5,7 +5,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoRepoGetRecordResponse struct {

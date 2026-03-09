@@ -25,14 +25,14 @@ func main() {
 
 func runFirehoseConsumer(relayHost string) error {
 	dialer := websocket.DefaultDialer
-	u, err := url.Parse("wss://cocoon.hailey.at")
+	u, err := url.Parse("wss://vow.rbrt.fr")
 	if err != nil {
 		return fmt.Errorf("invalid relayHost: %w", err)
 	}
 
 	u.Path = "xrpc/com.atproto.sync.subscribeRepos"
 	conn, _, err := dialer.Dial(u.String(), http.Header{
-		"User-Agent": []string{"cocoon-test/0.0.0"},
+		"User-Agent": []string{"vow-test/0.0.0"},
 	})
 	if err != nil {
 		return fmt.Errorf("subscribing to firehose failed (dialing): %w", err)

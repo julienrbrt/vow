@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/haileyok/cocoon/internal/db"
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/internal/db"
+	"pkg.rbrt.fr/vow/models"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"gorm.io/gorm/clause"

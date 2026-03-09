@@ -13,7 +13,7 @@ import (
 	cbg "github.com/whyrusleeping/cbor-gen"
 	"gorm.io/gorm"
 
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type DbPersister struct {

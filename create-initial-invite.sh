@@ -19,7 +19,7 @@ INVITE_CODE=""
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
     ATTEMPT=$((ATTEMPT + 1))
-    OUTPUT=$(/cocoon create-invite-code --uses 1 2>&1)
+    OUTPUT=$(/vow create-invite-code --uses 1 2>&1)
     INVITE_CODE=$(echo "$OUTPUT" | grep -oE '[a-zA-Z0-9]{8}-[a-zA-Z0-9]{8}' || echo "")
 
     if [ -n "$INVITE_CODE" ]; then

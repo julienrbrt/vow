@@ -14,7 +14,7 @@ import (
 	"time"
 
 	cache "github.com/go-pkgz/expirable-cache/v3"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 

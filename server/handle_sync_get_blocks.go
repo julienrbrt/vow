@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/bluesky-social/indigo/carstore"
-	"github.com/haileyok/cocoon/internal/helpers"
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"

@@ -19,10 +19,7 @@ import (
 	"github.com/bluesky-social/indigo/carstore"
 	"github.com/bluesky-social/indigo/events"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
-	"github.com/haileyok/cocoon/internal/db"
-	"github.com/haileyok/cocoon/metrics"
-	"github.com/haileyok/cocoon/models"
-	"github.com/haileyok/cocoon/recording_blockstore"
+	"github.com/bluesky-social/indigo/repo"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
@@ -30,6 +27,10 @@ import (
 	"github.com/ipld/go-car"
 	"github.com/multiformats/go-multihash"
 	"gorm.io/gorm/clause"
+	"pkg.rbrt.fr/vow/internal/db"
+	"pkg.rbrt.fr/vow/metrics"
+	"pkg.rbrt.fr/vow/models"
+	"pkg.rbrt.fr/vow/recording_blockstore"
 )
 
 type cachedRepo struct {

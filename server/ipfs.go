@@ -36,7 +36,7 @@ func (s *Server) pinBlobToRemote(ctx context.Context, cidStr string, name string
 		"cid":  cidStr,
 		"name": name,
 		"meta": map[string]string{
-			"pinned_by": "cocoon",
+			"pinned_by": "vow",
 			"pinned_at": time.Now().UTC().Format(time.RFC3339),
 		},
 	}

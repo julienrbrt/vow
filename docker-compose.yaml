@@ -5,70 +5,71 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/haileyok/cocoon:latest
-    container_name: cocoon-init-keys
+    image: ghcr.io/julien/vow:latest
+    container_name: vow-init-keys
     volumes:
       - ./keys:/keys
-      - ./data:/data/cocoon
+      - ./data:/data/vow
       - ./init-keys.sh:/init-keys.sh:ro
     environment:
-      COCOON_DID: ${COCOON_DID}
-      COCOON_HOSTNAME: ${COCOON_HOSTNAME}
-      COCOON_ROTATION_KEY_PATH: /keys/rotation.key
-      COCOON_JWK_PATH: /keys/jwk.key
-      COCOON_CONTACT_EMAIL: ${COCOON_CONTACT_EMAIL}
-      COCOON_RELAYS: ${COCOON_RELAYS:-https://bsky.network}
-      COCOON_ADMIN_PASSWORD: ${COCOON_ADMIN_PASSWORD}
+      VOW_DID: ${VOW_DID}
+      VOW_HOSTNAME: ${VOW_HOSTNAME}
+      VOW_ROTATION_KEY_PATH: /keys/rotation.key
+      VOW_JWK_PATH: /keys/jwk.key
+      VOW_CONTACT_EMAIL: ${VOW_CONTACT_EMAIL}
+      VOW_RELAYS: ${VOW_RELAYS:-https://bsky.network}
+      VOW_ADMIN_PASSWORD: ${VOW_ADMIN_PASSWORD}
     entrypoint: ["/bin/sh", "/init-keys.sh"]
     restart: "no"
 
-  cocoon:
+  vow:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/haileyok/cocoon:latest
-    container_name: cocoon-pds
-    network_mode: host
+    image: ghcr.io/julien/vow:latest
+    container_name: vow-pds
     depends_on:
       init-keys:
         condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
-      - ./data:/data/cocoon
+      - ./data:/data/vow
       - ./keys/rotation.key:/keys/rotation.key:ro
       - ./keys/jwk.key:/keys/jwk.key:ro
     environment:
       # Required settings
-      COCOON_DID: ${COCOON_DID}
-      COCOON_HOSTNAME: ${COCOON_HOSTNAME}
-      COCOON_ROTATION_KEY_PATH: /keys/rotation.key
-      COCOON_JWK_PATH: /keys/jwk.key
-      COCOON_CONTACT_EMAIL: ${COCOON_CONTACT_EMAIL}
-      COCOON_RELAYS: ${COCOON_RELAYS:-https://bsky.network}
-      COCOON_ADMIN_PASSWORD: ${COCOON_ADMIN_PASSWORD}
-      COCOON_SESSION_SECRET: ${COCOON_SESSION_SECRET}
+      VOW_DID: ${VOW_DID}
+      VOW_HOSTNAME: ${VOW_HOSTNAME}
+      VOW_ROTATION_KEY_PATH: /keys/rotation.key
+      VOW_JWK_PATH: /keys/jwk.key
+      VOW_CONTACT_EMAIL: ${VOW_CONTACT_EMAIL}
+      VOW_RELAYS: ${VOW_RELAYS:-https://bsky.network}
+      VOW_ADMIN_PASSWORD: ${VOW_ADMIN_PASSWORD}
+      VOW_SESSION_SECRET: ${VOW_SESSION_SECRET}
 
       # Server configuration
-      COCOON_ADDR: ":8080"
-      COCOON_DB_NAME: ${COCOON_DB_NAME:-/data/cocoon/cocoon.db}
-      COCOON_BLOCKSTORE_VARIANT: ${COCOON_BLOCKSTORE_VARIANT:-sqlite}
+      VOW_ADDR: ":8080"
+      VOW_DB_NAME: ${VOW_DB_NAME:-/data/vow/vow.db}
+      VOW_BLOCKSTORE_VARIANT: ${VOW_BLOCKSTORE_VARIANT:-sqlite}
 
       # Optional: SMTP settings for email
-      COCOON_SMTP_USER: ${COCOON_SMTP_USER:-}
-      COCOON_SMTP_PASS: ${COCOON_SMTP_PASS:-}
-      COCOON_SMTP_HOST: ${COCOON_SMTP_HOST:-}
-      COCOON_SMTP_PORT: ${COCOON_SMTP_PORT:-}
-      COCOON_SMTP_EMAIL: ${COCOON_SMTP_EMAIL:-}
-      COCOON_SMTP_NAME: ${COCOON_SMTP_NAME:-}
+      VOW_SMTP_USER: ${VOW_SMTP_USER:-}
+      VOW_SMTP_PASS: ${VOW_SMTP_PASS:-}
+      VOW_SMTP_HOST: ${VOW_SMTP_HOST:-}
+      VOW_SMTP_PORT: ${VOW_SMTP_PORT:-}
+      VOW_SMTP_EMAIL: ${VOW_SMTP_EMAIL:-}
+      VOW_SMTP_NAME: ${VOW_SMTP_NAME:-}
 
       # Optional: IPFS pinning configuration
-      COCOON_IPFS_BLOBSTORE_ENABLED: ${COCOON_IPFS_BLOBSTORE_ENABLED:-false}
-      COCOON_IPFS_NODE_URL: ${COCOON_IPFS_NODE_URL:-http://127.0.0.1:5001}
-      COCOON_IPFS_GATEWAY_URL: ${COCOON_IPFS_GATEWAY_URL:-}
-      COCOON_IPFS_PINNING_SERVICE_URL: ${COCOON_IPFS_PINNING_SERVICE_URL:-}
-      COCOON_IPFS_PINNING_SERVICE_TOKEN: ${COCOON_IPFS_PINNING_SERVICE_TOKEN:-}
+      VOW_IPFS_BLOBSTORE_ENABLED: ${VOW_IPFS_BLOBSTORE_ENABLED:-false}
+      VOW_IPFS_NODE_URL: ${VOW_IPFS_NODE_URL:-http://127.0.0.1:5001}
+      VOW_IPFS_GATEWAY_URL: ${VOW_IPFS_GATEWAY_URL:-}
+      VOW_IPFS_PINNING_SERVICE_URL: ${VOW_IPFS_PINNING_SERVICE_URL:-}
+      VOW_IPFS_PINNING_SERVICE_TOKEN: ${VOW_IPFS_PINNING_SERVICE_TOKEN:-}
 
       # Optional: Fallback proxy
-      COCOON_FALLBACK_PROXY: ${COCOON_FALLBACK_PROXY:-}
+      VOW_FALLBACK_PROXY: ${VOW_FALLBACK_PROXY:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/xrpc/_health"]
@@ -81,44 +82,28 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/haileyok/cocoon:latest
-    container_name: cocoon-create-invite
-    network_mode: host
+    image: ghcr.io/julien/vow:latest
+    container_name: vow-create-invite
+    network_mode: "service:vow"
     volumes:
       - ./keys:/keys
-      - ./data:/data/cocoon
+      - ./data:/data/vow
       - ./create-initial-invite.sh:/create-initial-invite.sh:ro
     environment:
-      COCOON_DID: ${COCOON_DID}
-      COCOON_HOSTNAME: ${COCOON_HOSTNAME}
-      COCOON_ROTATION_KEY_PATH: /keys/rotation.key
-      COCOON_JWK_PATH: /keys/jwk.key
-      COCOON_CONTACT_EMAIL: ${COCOON_CONTACT_EMAIL}
-      COCOON_RELAYS: ${COCOON_RELAYS:-https://bsky.network}
-      COCOON_ADMIN_PASSWORD: ${COCOON_ADMIN_PASSWORD}
-      COCOON_DB_NAME: ${COCOON_DB_NAME:-/data/cocoon/cocoon.db}
+      VOW_DID: ${VOW_DID}
+      VOW_HOSTNAME: ${VOW_HOSTNAME}
+      VOW_ROTATION_KEY_PATH: /keys/rotation.key
+      VOW_JWK_PATH: /keys/jwk.key
+      VOW_CONTACT_EMAIL: ${VOW_CONTACT_EMAIL}
+      VOW_RELAYS: ${VOW_RELAYS:-https://bsky.network}
+      VOW_ADMIN_PASSWORD: ${VOW_ADMIN_PASSWORD}
+      VOW_DB_NAME: ${VOW_DB_NAME:-/data/vow/vow.db}
     depends_on:
-      - init-keys
+      vow:
+        condition: service_healthy
     entrypoint: ["/bin/sh", "/create-initial-invite.sh"]
     restart: "no"
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: cocoon-caddy
-    network_mode: host
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    restart: unless-stopped
-    environment:
-      COCOON_HOSTNAME: ${COCOON_HOSTNAME}
-      CADDY_ACME_EMAIL: ${COCOON_CONTACT_EMAIL:-}
-
 volumes:
   data:
-    driver: local
-  caddy_data:
-    driver: local
-  caddy_config:
     driver: local

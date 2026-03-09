@@ -39,6 +39,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 This is an AT Protocol Personal Data Server (aka, an atproto PDS)
 
-Code: https://github.com/haileyok/cocoon
+Code: https://pkg.rbrt.fr/vow
 Version: `+s.config.Version+"\n")
 }

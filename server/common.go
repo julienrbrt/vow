@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"github.com/haileyok/cocoon/models"
+	"pkg.rbrt.fr/vow/models"
 	"gorm.io/gorm"
 )
 
