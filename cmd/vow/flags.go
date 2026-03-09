@@ -24,7 +24,6 @@ const (
 	flagIpfsPinningServiceToken = "ipfs-pinning-service-token"
 	flagSessionSecret           = "session-secret"
 	flagSessionCookieKey        = "session-cookie-key"
-	flagBlockstoreVariant       = "blockstore-variant"
 	flagFallbackProxy           = "fallback-proxy"
 	flagLogLevel                = "log-level"
 	flagDebug                   = "debug"

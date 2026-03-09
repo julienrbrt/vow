@@ -17,8 +17,6 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/glebarez/sqlite"
-	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/server"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -26,6 +24,8 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/server"
 )
 
 var Version = "dev"
@@ -70,7 +70,7 @@ func init() {
 	pf.String(flagIpfsPinningServiceToken, "", "Bearer token for authenticating with the remote IPFS pinning service")
 	pf.String(flagSessionSecret, "", "Session secret")
 	pf.String(flagSessionCookieKey, "session", "Session cookie key name")
-	pf.String(flagBlockstoreVariant, "sqlite", "Blockstore variant (sqlite)")
+
 	pf.String(flagFallbackProxy, "", "Fallback proxy URL")
 	pf.String(flagLogLevel, "info", "Log level: debug, info, warn, error")
 	pf.Bool(flagDebug, false, "Enable debug logging (shorthand for --log-level=debug)")
@@ -179,10 +179,10 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 					PinningServiceURL:   v.GetString(flagIpfsPinningServiceUrl),
 					PinningServiceToken: v.GetString(flagIpfsPinningServiceToken),
 				},
-				SessionSecret:     v.GetString(flagSessionSecret),
-				SessionCookieKey:  v.GetString(flagSessionCookieKey),
-				BlockstoreVariant: server.MustReturnBlockstoreVariant(v.GetString(flagBlockstoreVariant)),
-				FallbackProxy:     v.GetString(flagFallbackProxy),
+				SessionSecret:    v.GetString(flagSessionSecret),
+				SessionCookieKey: v.GetString(flagSessionCookieKey),
+
+				FallbackProxy: v.GetString(flagFallbackProxy),
 			})
 			if err != nil {
 				return fmt.Errorf("error creating vow: %w", err)

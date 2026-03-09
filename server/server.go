@@ -129,24 +129,22 @@ type Args struct {
 	SessionSecret    string
 	SessionCookieKey string
 
-	BlockstoreVariant BlockstoreVariant
-	FallbackProxy     string
+	FallbackProxy string
 }
 
 type config struct {
-	Version           string
-	Did               string
-	Hostname          string
-	ContactEmail      string
-	EnforcePeering    bool
-	Relays            []string
-	AdminPassword     string
-	RequireInvite     bool
-	SmtpEmail         string
-	SmtpName          string
-	SessionCookieKey  string
-	BlockstoreVariant BlockstoreVariant
-	FallbackProxy     string
+	Version          string
+	Did              string
+	Hostname         string
+	ContactEmail     string
+	EnforcePeering   bool
+	Relays           []string
+	AdminPassword    string
+	RequireInvite    bool
+	SmtpEmail        string
+	SmtpName         string
+	SessionCookieKey string
+	FallbackProxy    string
 }
 
 type CustomValidator struct {
@@ -402,19 +400,18 @@ func New(args *Args) (*Server, error) {
 		sessions:   cookieStore,
 		validator:  vdtor,
 		config: &config{
-			Version:           args.Version,
-			Did:               args.Did,
-			Hostname:          args.Hostname,
-			ContactEmail:      args.ContactEmail,
-			EnforcePeering:    false,
-			Relays:            args.Relays,
-			AdminPassword:     args.AdminPassword,
-			RequireInvite:     args.RequireInvite,
-			SmtpName:          args.SmtpName,
-			SmtpEmail:         args.SmtpEmail,
-			SessionCookieKey:  args.SessionCookieKey,
-			BlockstoreVariant: args.BlockstoreVariant,
-			FallbackProxy:     args.FallbackProxy,
+			Version:          args.Version,
+			Did:              args.Did,
+			Hostname:         args.Hostname,
+			ContactEmail:     args.ContactEmail,
+			EnforcePeering:   false,
+			Relays:           args.Relays,
+			AdminPassword:    args.AdminPassword,
+			RequireInvite:    args.RequireInvite,
+			SmtpName:         args.SmtpName,
+			SmtpEmail:        args.SmtpEmail,
+			SessionCookieKey: args.SessionCookieKey,
+			FallbackProxy:    args.FallbackProxy,
 		},
 		evtman:   events.NewEventManager(evtPersister),
 		passport: identity.NewPassport(h, identity.NewMemCache(10_000)),

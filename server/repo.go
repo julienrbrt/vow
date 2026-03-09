@@ -19,17 +19,18 @@ import (
 	"github.com/bluesky-social/indigo/carstore"
 	"github.com/bluesky-social/indigo/events"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
+	blockstore "github.com/ipfs/boxo/blockstore"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	legacyblockstore "github.com/ipfs/go-ipfs-blockstore" //nolint:staticcheck
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
 	"github.com/multiformats/go-multihash"
 	"gorm.io/gorm/clause"
+	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/db"
 	"pkg.rbrt.fr/vow/metrics"
 	"pkg.rbrt.fr/vow/models"
-	"pkg.rbrt.fr/vow/recording_blockstore"
 )
 
 type cachedRepo struct {
@@ -71,7 +72,7 @@ func (rm *RepoMan) withRepo(ctx context.Context, did string, rootCid cid.Cid, fn
 	defer cr.mu.Unlock()
 
 	if cr.repo == nil || cr.root != rootCid {
-		bs := rm.s.getBlockstore(did)
+		bs := vowblockstore.New(did, rm.s.db)
 		r, err := openRepo(ctx, bs, rootCid, did)
 		if err != nil {
 			return err
@@ -144,7 +145,7 @@ type RepoCommit struct {
 	Rev string `json:"rev"`
 }
 
-func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, did string) (*atp.Repo, error) { //nolint:staticcheck
+func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, did string) (*atp.Repo, error) {
 	commitBlock, err := bs.Get(ctx, rootCid)
 	if err != nil {
 		return nil, fmt.Errorf("reading commit block: %w", err)
@@ -169,8 +170,8 @@ func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, di
 	}, nil
 }
 
-func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) { //nolint:staticcheck
-	if _, err := r.MST.WriteDiffBlocks(ctx, bs); err != nil {
+func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
+	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
 		return cid.Undef, "", fmt.Errorf("writing MST blocks: %w", err)
 	}
 
@@ -209,7 +210,7 @@ func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, sign
 	return commitCid, commit.Rev, nil
 }
 
-func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *MarshalableMap) (cid.Cid, error) { //nolint:staticcheck
+func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *MarshalableMap) (cid.Cid, error) {
 	buf := new(bytes.Buffer)
 	if err := rec.MarshalCBOR(buf); err != nil {
 		return cid.Undef, err
@@ -239,8 +240,8 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return nil, err
 	}
 
-	dbs := rm.s.getBlockstore(urepo.Did)
-	bs := recording_blockstore.New(dbs)
+	dbs := vowblockstore.New(urepo.Did, rm.s.db)
+	bs := vowblockstore.NewRecording(dbs)
 
 	var results []ApplyWriteResult
 	var ops []*atp.Operation
@@ -556,7 +557,7 @@ func (rm *RepoMan) getRecordProof(ctx context.Context, urepo models.Repo, collec
 		return cid.Undef, nil, err
 	}
 
-	dbs := rm.s.getBlockstore(urepo.Did)
+	dbs := vowblockstore.New(urepo.Did, rm.s.db)
 
 	var proofBlocks []blocks.Block
 	var recordCid *cid.Cid

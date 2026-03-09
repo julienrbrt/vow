@@ -12,6 +12,7 @@ import (
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipld/go-car"
+	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -29,7 +30,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := s.getBlockstore(urepo.Repo.Did)
+	bs := vowblockstore.New(urepo.Repo.Did, s.db)
 
 	cs, err := car.NewCarReader(bytes.NewReader(b))
 	if err != nil {

@@ -5,10 +5,11 @@ import (
 	"net/http"
 
 	"github.com/bluesky-social/indigo/carstore"
-	"pkg.rbrt.fr/vow/internal/helpers"
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
+	vowblockstore "pkg.rbrt.fr/vow/blockstore"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 type ComAtprotoSyncGetBlocksRequest struct {
@@ -71,7 +72,7 @@ func (s *Server) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := s.getBlockstore(urepo.Repo.Did)
+	bs := vowblockstore.New(urepo.Repo.Did, s.db)
 
 	for _, c := range cids {
 		b, err := bs.Get(ctx, c)

@@ -1,17 +1,19 @@
-package sqlite_blockstore
+package blockstore
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"pkg.rbrt.fr/vow/internal/db"
-	"pkg.rbrt.fr/vow/models"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"gorm.io/gorm/clause"
+
+	"pkg.rbrt.fr/vow/internal/db"
+	"pkg.rbrt.fr/vow/models"
 )
 
+// SqliteBlockstore is a blockstore backed by a SQLite database.
 type SqliteBlockstore struct {
 	db       *db.DB
 	did      string
@@ -132,6 +134,4 @@ func (bs *SqliteBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, er
 	return nil, fmt.Errorf("iteration not allowed on sqlite blockstore")
 }
 
-func (bs *SqliteBlockstore) HashOnRead(enabled bool) {
-	panic("not implemented")
-}
+func (bs *SqliteBlockstore) HashOnRead(bool) {}

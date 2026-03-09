@@ -19,6 +19,7 @@ import (
 	"github.com/bluesky-social/indigo/util"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -245,7 +246,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if request.Did == nil || *request.Did == "" {
-		bs := s.getBlockstore(signupDid)
+		bs := vowblockstore.New(signupDid, s.db)
 
 		clk := syntax.NewTIDClock(0)
 		r := &atp.Repo{
