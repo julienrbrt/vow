@@ -9,12 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/models"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 type ComAtprotoServerCreateSessionRequest struct {
@@ -50,12 +49,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		var verr ValidationError
 		if errors.As(err, &verr) {
 			if verr.Field == "Identifier" {
-				helpers.InputError(w, to.StringPtr("InvalidRequest"))
+				helpers.InputError(w, new("InvalidRequest"))
 				return
 			}
 
 			if verr.Field == "Password" {
-				helpers.InputError(w, to.StringPtr("InvalidRequest"))
+				helpers.InputError(w, new("InvalidRequest"))
 				return
 			}
 		}
@@ -84,7 +83,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			helpers.InputError(w, to.StringPtr("InvalidRequest"))
+			helpers.InputError(w, new("InvalidRequest"))
 			return
 		}
 
@@ -97,7 +96,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		if err != bcrypt.ErrMismatchedHashAndPassword {
 			logger.Error("error comparing hash and password", "error", err)
 		}
-		helpers.InputError(w, to.StringPtr("InvalidRequest"))
+		helpers.InputError(w, new("InvalidRequest"))
 		return
 	}
 
@@ -110,7 +109,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		helpers.InputError(w, to.StringPtr("AuthFactorTokenRequired"))
+		helpers.InputError(w, new("AuthFactorTokenRequired"))
 		return
 	}
 
@@ -124,7 +123,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			helpers.InputError(w, to.StringPtr("AuthFactorTokenRequired"))
+			helpers.InputError(w, new("AuthFactorTokenRequired"))
 			return
 		}
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/events"
@@ -97,7 +96,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 	if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 		RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 			Did:    repo.Repo.Did,
-			Handle: to.StringPtr(req.Handle),
+			Handle: new(req.Handle),
 			Seq:    time.Now().UnixMicro(), // TODO: no
 			Time:   time.Now().Format(util.ISO8601),
 		},

@@ -2,10 +2,9 @@ package server
 
 import (
 	"context"
-	"pkg.rbrt.fr/vow/identity"
 	"net/http"
+	"pkg.rbrt.fr/vow/identity"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
@@ -20,13 +19,13 @@ func (s *Server) handleResolveHandle(w http.ResponseWriter, r *http.Request) {
 	handle := r.URL.Query().Get("handle")
 
 	if handle == "" {
-		helpers.InputError(w, to.StringPtr("Handle must be supplied in request."))
+		helpers.InputError(w, new("Handle must be supplied in request."))
 		return
 	}
 
 	parsed, err := syntax.ParseHandle(handle)
 	if err != nil {
-		helpers.InputError(w, to.StringPtr("Invalid handle."))
+		helpers.InputError(w, new("Invalid handle."))
 		return
 	}
 

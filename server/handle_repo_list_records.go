@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -87,7 +86,7 @@ func (s *Server) handleListRecords(w http.ResponseWriter, r *http.Request) {
 	if _, err := syntax.ParseDID(did); err != nil {
 		actor, err := s.getActorByHandle(ctx, req.Repo)
 		if err != nil {
-			helpers.InputError(w, to.StringPtr("RepoNotFound"))
+			helpers.InputError(w, new("RepoNotFound"))
 			return
 		}
 		did = actor.Did
@@ -124,7 +123,7 @@ func (s *Server) handleListRecords(w http.ResponseWriter, r *http.Request) {
 
 	var newcursor *string
 	if len(records) == limit {
-		newcursor = to.StringPtr(records[len(records)-1].CreatedAt)
+		newcursor = new(records[len(records)-1].CreatedAt)
 	}
 
 	s.writeJSON(w, 200, ComAtprotoRepoListRecordsResponse{

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -39,7 +38,7 @@ func (s *Server) handleServerConfirmEmail(w http.ResponseWriter, r *http.Request
 	}
 
 	if *urepo.EmailVerificationCode != req.Token {
-		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, new("InvalidToken"))
 		return
 	}
 

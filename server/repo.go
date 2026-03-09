@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/atdata"
@@ -264,7 +263,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				}
 			} else if op.Rkey == nil {
 				// creates that don't supply an rkey will have one generated for them
-				op.Rkey = to.StringPtr(rm.clock.Next().String())
+				op.Rkey = new(rm.clock.Next().String())
 				writes[i].Rkey = op.Rkey
 			}
 
@@ -320,10 +319,10 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				})
 
 				results = append(results, ApplyWriteResult{
-					Type:             to.StringPtr(OpTypeCreate.String()),
-					Uri:              to.StringPtr("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
-					Cid:              to.StringPtr(nc.String()),
-					ValidationStatus: to.StringPtr("valid"), // TODO: obviously this might not be true atm lol
+					Type:             new(OpTypeCreate.String()),
+					Uri:              new("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
+					Cid:              new(nc.String()),
+					ValidationStatus: new("valid"), // TODO: obviously this might not be true atm lol
 				})
 			case OpTypeDelete:
 				// try to find the old record in the database
@@ -349,7 +348,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				ops = append(ops, atpOp)
 
 				results = append(results, ApplyWriteResult{
-					Type: to.StringPtr(OpTypeDelete.String()),
+					Type: new(OpTypeDelete.String()),
 				})
 			case OpTypeUpdate:
 				// HACK: same hack as above for type fixes
@@ -389,10 +388,10 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				})
 
 				results = append(results, ApplyWriteResult{
-					Type:             to.StringPtr(OpTypeUpdate.String()),
-					Uri:              to.StringPtr("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
-					Cid:              to.StringPtr(nc.String()),
-					ValidationStatus: to.StringPtr("valid"), // TODO: obviously this might not be true atm lol
+					Type:             new(OpTypeUpdate.String()),
+					Uri:              new("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
+					Cid:              new(nc.String()),
+					ValidationStatus: new("valid"), // TODO: obviously this might not be true atm lol
 				})
 			}
 		}
@@ -541,7 +540,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 	}
 
 	for i := range results {
-		results[i].Type = to.StringPtr(*results[i].Type + "Result")
+		results[i].Type = new(*results[i].Type + "Result")
 		results[i].Commit = &RepoCommit{
 			Cid: newroot.String(),
 			Rev: rev,

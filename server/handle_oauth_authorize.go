@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/oauth"
 	"pkg.rbrt.fr/vow/oauth/constants"
@@ -30,7 +29,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 		id, err := oauth.DecodeRequestUri(requestUri)
 		if err != nil {
 			logger.Error("no request uri found in input", "url", r.URL.String())
-			helpers.InputError(w, to.StringPtr("no request uri"))
+			helpers.InputError(w, new("no request uri"))
 			return
 		}
 		reqId = id
@@ -46,16 +45,16 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 			CodeChallengeMethod: r.URL.Query().Get("code_challenge_method"),
 		}
 		if v := r.URL.Query().Get("code_challenge"); v != "" {
-			parRequest.CodeChallenge = to.StringPtr(v)
+			parRequest.CodeChallenge = new(v)
 		}
 		if v := r.URL.Query().Get("login_hint"); v != "" {
-			parRequest.LoginHint = to.StringPtr(v)
+			parRequest.LoginHint = new(v)
 		}
 		if v := r.URL.Query().Get("dpop_jkt"); v != "" {
-			parRequest.DpopJkt = to.StringPtr(v)
+			parRequest.DpopJkt = new(v)
 		}
 		if v := r.URL.Query().Get("response_mode"); v != "" {
-			parRequest.ResponseMode = to.StringPtr(v)
+			parRequest.ResponseMode = new(v)
 		}
 
 		if err := s.validator.Struct(parRequest); err != nil {
@@ -71,7 +70,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 				}
 				return
 			}
-			helpers.InputError(w, to.StringPtr("no request uri and invalid parameters"))
+			helpers.InputError(w, new("no request uri and invalid parameters"))
 			return
 		}
 
@@ -80,7 +79,7 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 		})
 		if err != nil {
 			s.logger.Error("error authenticating client in standard request", "client_id", parRequest.ClientID, "error", err)
-			helpers.ServerError(w, to.StringPtr(err.Error()))
+			helpers.ServerError(w, new(err.Error()))
 			return
 		}
 
@@ -121,19 +120,19 @@ func (s *Server) handleOauthAuthorizeGet(w http.ResponseWriter, r *http.Request)
 
 	var req provider.OauthAuthorizationRequest
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_authorization_requests WHERE request_id = ?", nil, reqId).Scan(&req).Error; err != nil {
-		helpers.ServerError(w, to.StringPtr(err.Error()))
+		helpers.ServerError(w, new(err.Error()))
 		return
 	}
 
 	clientId := r.URL.Query().Get("client_id")
 	if clientId != req.ClientId {
-		helpers.InputError(w, to.StringPtr("client id does not match the client id for the supplied request"))
+		helpers.InputError(w, new("client id does not match the client id for the supplied request"))
 		return
 	}
 
 	client, err := s.oauthProvider.ClientManager.GetClient(r.Context(), req.ClientId)
 	if err != nil {
-		helpers.ServerError(w, to.StringPtr(err.Error()))
+		helpers.ServerError(w, new(err.Error()))
 		return
 	}
 
@@ -181,19 +180,19 @@ func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request
 
 	reqId, err := oauth.DecodeRequestUri(req.RequestUri)
 	if err != nil {
-		helpers.InputError(w, to.StringPtr(err.Error()))
+		helpers.InputError(w, new(err.Error()))
 		return
 	}
 
 	var authReq provider.OauthAuthorizationRequest
 	if err := s.db.Raw(ctx, "SELECT * FROM oauth_authorization_requests WHERE request_id = ?", nil, reqId).Scan(&authReq).Error; err != nil {
-		helpers.ServerError(w, to.StringPtr(err.Error()))
+		helpers.ServerError(w, new(err.Error()))
 		return
 	}
 
 	client, err := s.oauthProvider.ClientManager.GetClient(r.Context(), authReq.ClientId)
 	if err != nil {
-		helpers.ServerError(w, to.StringPtr(err.Error()))
+		helpers.ServerError(w, new(err.Error()))
 		return
 	}
 
@@ -204,12 +203,12 @@ func (s *Server) handleOauthAuthorizePost(w http.ResponseWriter, r *http.Request
 	}
 
 	if time.Now().After(authReq.ExpiresAt) {
-		helpers.InputError(w, to.StringPtr("the request has expired"))
+		helpers.InputError(w, new("the request has expired"))
 		return
 	}
 
 	if authReq.Sub != nil || authReq.Code != nil {
-		helpers.InputError(w, to.StringPtr("this request was already authorized"))
+		helpers.InputError(w, new("this request was already authorized"))
 		return
 	}
 

@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -27,7 +26,7 @@ func (s *Server) handleDescribeRepo(w http.ResponseWriter, r *http.Request) {
 	repo, err := s.getRepoActorByDid(ctx, did)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			helpers.InputError(w, to.StringPtr("RepoNotFound"))
+			helpers.InputError(w, new("RepoNotFound"))
 			return
 		}
 

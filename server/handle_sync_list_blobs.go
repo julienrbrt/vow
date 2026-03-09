@@ -4,10 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Azure/go-autorest/autorest/to"
+	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	"github.com/ipfs/go-cid"
 )
 
 type ComAtprotoSyncListBlobsResponse struct {
@@ -54,7 +53,7 @@ func (s *Server) handleSyncListBlobs(w http.ResponseWriter, r *http.Request) {
 	status := urepo.Status()
 	if status != nil {
 		if *status == "deactivated" {
-			helpers.InputError(w, to.StringPtr("RepoDeactivated"))
+			helpers.InputError(w, new("RepoDeactivated"))
 			return
 		}
 	}

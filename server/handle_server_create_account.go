@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	atp "github.com/bluesky-social/indigo/atproto/repo"
@@ -59,22 +58,22 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		var verr ValidationError
 		if errors.As(err, &verr) {
 			if verr.Field == "Email" {
-				helpers.InputError(w, to.StringPtr("InvalidEmail"))
+				helpers.InputError(w, new("InvalidEmail"))
 				return
 			}
 
 			if verr.Field == "Handle" {
-				helpers.InputError(w, to.StringPtr("InvalidHandle"))
+				helpers.InputError(w, new("InvalidHandle"))
 				return
 			}
 
 			if verr.Field == "Password" {
-				helpers.InputError(w, to.StringPtr("InvalidPassword"))
+				helpers.InputError(w, new("InvalidPassword"))
 				return
 			}
 
 			if verr.Field == "InviteCode" {
-				helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+				helpers.InputError(w, new("InvalidInviteCode"))
 				return
 			}
 		}
@@ -86,19 +85,19 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 
 		token := strings.TrimSpace(strings.Replace(r.Header.Get("authorization"), "Bearer ", "", 1))
 		if token == "" {
-			helpers.UnauthorizedError(w, to.StringPtr("must authenticate to use an existing did"))
+			helpers.UnauthorizedError(w, new("must authenticate to use an existing did"))
 			return
 		}
 		authDid, err := s.validateServiceAuth(r.Context(), token, "com.atproto.server.createAccount")
 
 		if err != nil {
 			logger.Warn("error validating authorization token", "endpoint", "com.atproto.server.createAccount", "error", err)
-			helpers.UnauthorizedError(w, to.StringPtr("invalid authorization token"))
+			helpers.UnauthorizedError(w, new("invalid authorization token"))
 			return
 		}
 
 		if authDid != signupDid {
-			helpers.ForbiddenError(w, to.StringPtr("auth did did not match signup did"))
+			helpers.ForbiddenError(w, new("auth did did not match signup did"))
 			return
 		}
 	}
@@ -111,25 +110,25 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil && actor.Did != signupDid {
-		helpers.InputError(w, to.StringPtr("HandleNotAvailable"))
+		helpers.InputError(w, new("HandleNotAvailable"))
 		return
 	}
 
 	if did, err := s.passport.ResolveHandle(r.Context(), request.Handle); err == nil && did != signupDid {
-		helpers.InputError(w, to.StringPtr("HandleNotAvailable"))
+		helpers.InputError(w, new("HandleNotAvailable"))
 		return
 	}
 
 	var ic models.InviteCode
 	if s.config.RequireInvite {
 		if strings.TrimSpace(request.InviteCode) == "" {
-			helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+			helpers.InputError(w, new("InvalidInviteCode"))
 			return
 		}
 
 		if err := s.db.Raw(ctx, "SELECT * FROM invite_codes WHERE code = ?", nil, request.InviteCode).Scan(&ic).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
-				helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+				helpers.InputError(w, new("InvalidInviteCode"))
 				return
 			}
 			logger.Error("error getting invite code from db", "error", err)
@@ -138,7 +137,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if ic.RemainingUseCount < 1 {
-			helpers.InputError(w, to.StringPtr("InvalidInviteCode"))
+			helpers.InputError(w, new("InvalidInviteCode"))
 			return
 		}
 	}
@@ -151,7 +150,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil && existingRepo.Did != signupDid {
-		helpers.InputError(w, to.StringPtr("EmailNotAvailable"))
+		helpers.InputError(w, new("EmailNotAvailable"))
 		return
 	}
 
@@ -215,7 +214,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		Did:                   signupDid,
 		CreatedAt:             time.Now(),
 		Email:                 request.Email,
-		EmailVerificationCode: to.StringPtr(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
+		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
 		Password:              string(hashed),
 		SigningKey:            k.Bytes(),
 	}
@@ -272,7 +271,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		if err := s.evtman.AddEvent(context.TODO(), &events.XRPCStreamEvent{
 			RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 				Did:    urepo.Did,
-				Handle: to.StringPtr(request.Handle),
+				Handle: new(request.Handle),
 				Seq:    time.Now().UnixMicro(), // TODO: no
 				Time:   time.Now().Format(util.ISO8601),
 			},

@@ -10,11 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/google/uuid"
+	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 )
 
 type ServerGetServiceAuthRequest struct {
@@ -49,7 +48,7 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 	}
 
 	if req.Lxm == "com.atproto.server.getServiceAuth" {
-		helpers.InputError(w, to.StringPtr("may not generate auth tokens recursively"))
+		helpers.InputError(w, new("may not generate auth tokens recursively"))
 		return
 	}
 
@@ -60,7 +59,7 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 		maxExp = now + 60
 	}
 	if exp > maxExp {
-		helpers.InputError(w, to.StringPtr("expiration too big. smoller please"))
+		helpers.InputError(w, new("expiration too big. smoller please"))
 		return
 	}
 

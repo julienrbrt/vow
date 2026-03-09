@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
@@ -72,7 +71,7 @@ func (s *Server) handleAtprotoDid(w http.ResponseWriter, r *http.Request) {
 
 	host := r.Host
 	if host == "" {
-		helpers.InputError(w, to.StringPtr("Invalid handle."))
+		helpers.InputError(w, new("Invalid handle."))
 		return
 	}
 
@@ -123,7 +122,7 @@ func (s *Server) handleOauthAuthorizationServer(w http.ResponseWriter, r *http.R
 		Issuer:                                     "https://" + s.config.Hostname,
 		RequestParameterSupported:                  true,
 		RequestUriParameterSupported:               true,
-		RequireRequestUriRegistration:              to.BoolPtr(true),
+		RequireRequestUriRegistration:              new(true),
 		ScopesSupported:                            VowSupportedScopes,
 		SubjectTypesSupported:                      []string{"public"},
 		ResponseTypesSupported:                     []string{"code"},

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/oauth"
 	"pkg.rbrt.fr/vow/oauth/constants"
@@ -39,22 +38,22 @@ func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
 		CodeChallengeMethod: r.FormValue("code_challenge_method"),
 	}
 	if v := r.FormValue("code_challenge"); v != "" {
-		parRequest.CodeChallenge = to.StringPtr(v)
+		parRequest.CodeChallenge = new(v)
 	}
 	if v := r.FormValue("login_hint"); v != "" {
-		parRequest.LoginHint = to.StringPtr(v)
+		parRequest.LoginHint = new(v)
 	}
 	if v := r.FormValue("dpop_jkt"); v != "" {
-		parRequest.DpopJkt = to.StringPtr(v)
+		parRequest.DpopJkt = new(v)
 	}
 	if v := r.FormValue("response_mode"); v != "" {
-		parRequest.ResponseMode = to.StringPtr(v)
+		parRequest.ResponseMode = new(v)
 	}
 	if v := r.FormValue("client_assertion_type"); v != "" {
-		parRequest.ClientAssertionType = to.StringPtr(v)
+		parRequest.ClientAssertionType = new(v)
 	}
 	if v := r.FormValue("client_assertion"); v != "" {
-		parRequest.ClientAssertion = to.StringPtr(v)
+		parRequest.ClientAssertion = new(v)
 	}
 
 	if err := s.validator.Struct(parRequest); err != nil {
@@ -90,13 +89,13 @@ func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		logger.Error("error authenticating client", "client_id", parRequest.ClientID, "error", err)
-		helpers.InputError(w, to.StringPtr(err.Error()))
+		helpers.InputError(w, new(err.Error()))
 		return
 	}
 
 	if parRequest.DpopJkt == nil {
 		if client.Metadata.DpopBoundAccessTokens {
-			parRequest.DpopJkt = to.StringPtr(dpopProof.JKT)
+			parRequest.DpopJkt = new(dpopProof.JKT)
 		}
 	} else {
 		if !client.Metadata.DpopBoundAccessTokens {

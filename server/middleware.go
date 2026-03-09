@@ -10,15 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang-jwt/jwt/v4"
+	"gitlab.com/yawning/secp256k1-voi"
+	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
+	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 	"pkg.rbrt.fr/vow/oauth/dpop"
 	"pkg.rbrt.fr/vow/oauth/provider"
-	"gitlab.com/yawning/secp256k1-voi"
-	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
-	"gorm.io/gorm"
 )
 
 // context keys for values set by middleware
@@ -48,7 +47,7 @@ func (s *Server) handleAdminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, password, ok := r.BasicAuth()
 		if !ok || username != "admin" || password != s.config.AdminPassword {
-			helpers.InputError(w, to.StringPtr("Unauthorized"))
+			helpers.InputError(w, new("Unauthorized"))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -293,7 +292,7 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 		}
 
-		proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, to.StringPtr(accessToken))
+		proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, new(accessToken))
 		if err != nil {
 			if errors.Is(err, dpop.ErrUseDpopNonce) {
 				w.Header().Set("WWW-Authenticate", `DPoP error="use_dpop_nonce"`)
@@ -322,7 +321,7 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 
 		if *oauthToken.Parameters.DpopJkt != proof.JKT {
 			logger.Error("jkt mismatch", "token", oauthToken.Parameters.DpopJkt, "proof", proof.JKT)
-			helpers.InputError(w, to.StringPtr("dpop jkt mismatch"))
+			helpers.InputError(w, new("dpop jkt mismatch"))
 			return
 		}
 

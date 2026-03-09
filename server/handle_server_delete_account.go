@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
@@ -159,7 +158,7 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 		RepoAccount: &atproto.SyncSubscribeRepos_Account{
 			Active: false,
 			Did:    req.Did,
-			Status: to.StringPtr("deleted"),
+			Status: new("deleted"),
 			Seq:    time.Now().UnixMicro(),
 			Time:   time.Now().Format(util.ISO8601),
 		},

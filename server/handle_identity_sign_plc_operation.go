@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -45,7 +44,7 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if repo.PlcOperationCode == nil || repo.PlcOperationCodeExpiresAt == nil {
-		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, new("InvalidToken"))
 		return
 	}
 

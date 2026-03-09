@@ -6,10 +6,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/Azure/go-autorest/autorest/to"
+	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	"github.com/ipfs/go-cid"
 )
 
 func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +43,7 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 	status := urepo.Status()
 	if status != nil {
 		if *status == "deactivated" {
-			helpers.InputError(w, to.StringPtr("RepoDeactivated"))
+			helpers.InputError(w, new("RepoDeactivated"))
 			return
 		}
 	}

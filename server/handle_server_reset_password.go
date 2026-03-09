@@ -5,10 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
+	"golang.org/x/crypto/bcrypt"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type ComAtprotoServerResetPasswordRequest struct {
@@ -35,7 +34,7 @@ func (s *Server) handleServerResetPassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	if urepo.PasswordResetCode == nil || urepo.PasswordResetCodeExpiresAt == nil {
-		helpers.InputError(w, to.StringPtr("InvalidToken"))
+		helpers.InputError(w, new("InvalidToken"))
 		return
 	}
 

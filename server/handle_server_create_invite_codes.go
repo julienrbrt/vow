@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -41,11 +40,11 @@ func (s *Server) handleCreateInviteCodes(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.CodeCount == nil {
-		req.CodeCount = to.IntPtr(1)
+		req.CodeCount = new(1)
 	}
 
 	if req.ForAccounts == nil {
-		req.ForAccounts = to.StringSlicePtr([]string{"admin"})
+		req.ForAccounts = new([]string{"admin"})
 	}
 
 	codes := make([]ComAtprotoServerCreateInviteCodesItem, 0, len(*req.ForAccounts))

@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 )
 
@@ -58,7 +57,7 @@ func (r *Repo) SignFor(ctx context.Context, did string, msg []byte) ([]byte, err
 func (r *Repo) Status() *string {
 	var status *string
 	if r.Deactivated {
-		status = to.StringPtr("deactivated")
+		status = new("deactivated")
 	}
 	return status
 }

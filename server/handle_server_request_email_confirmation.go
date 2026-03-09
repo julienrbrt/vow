@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/to"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -17,7 +16,7 @@ func (s *Server) handleServerRequestEmailConfirmation(w http.ResponseWriter, r *
 	urepo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
 	if urepo.EmailConfirmedAt != nil {
-		helpers.InputError(w, to.StringPtr("InvalidRequest"))
+		helpers.InputError(w, new("InvalidRequest"))
 		return
 	}
 
