@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+
 	"pkg.rbrt.fr/vow/identity"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -10,6 +11,7 @@ import (
 )
 
 func (s *Server) handleResolveHandle(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	logger := s.logger.With("name", "handleServerResolveHandle")
 
 	type Resp struct {
@@ -29,8 +31,16 @@ func (s *Server) handleResolveHandle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)
-	did, err := s.passport.ResolveHandle(ctx, parsed.String())
+	// Check local accounts first before hitting DNS / well-known.
+	if actor, err := s.getActorByHandle(ctx, parsed.String()); err == nil {
+		s.writeJSON(w, 200, Resp{Did: actor.Did})
+		return
+	}
+
+	did, err := s.passport.ResolveHandle(
+		context.WithValue(ctx, identity.SkipCacheKey, true),
+		parsed.String(),
+	)
 	if err != nil {
 		logger.Error("error resolving handle", "error", err)
 		helpers.ServerError(w, nil)
