@@ -84,22 +84,21 @@ type IPFSConfig struct {
 }
 
 type Server struct {
-	http             *http.Client
-	httpd            *http.Server
-	mail             *mailyak.MailYak
-	mailLk           *sync.Mutex
-	router           *chi.Mux
-	db               *db.DB
-	plcClient        *plc.Client
-	logger           *slog.Logger
-	config           *config
-	privateKey       *ecdsa.PrivateKey
-	repoman          *RepoMan
-	oauthProvider    *provider.Provider
-	evtman           *events.EventManager
-	passport         *identity.Passport
-	signerHub        *SignerHub
-	serviceAuthCache *serviceAuthCache
+	http          *http.Client
+	httpd         *http.Server
+	mail          *mailyak.MailYak
+	mailLk        *sync.Mutex
+	router        *chi.Mux
+	db            *db.DB
+	plcClient     *plc.Client
+	logger        *slog.Logger
+	config        *config
+	privateKey    *ecdsa.PrivateKey
+	repoman       *RepoMan
+	oauthProvider *provider.Provider
+	evtman        *events.EventManager
+	passport      *identity.Passport
+	signerHub     *SignerHub
 
 	sessions         *sessions.CookieStore
 	validator        *validator.Validate
@@ -423,10 +422,9 @@ func New(args *Args) (*Server, error) {
 			SessionCookieKey: args.SessionCookieKey,
 			FallbackProxy:    args.FallbackProxy,
 		},
-		signerHub:        NewSignerHub(),
-		serviceAuthCache: newServiceAuthCache(),
-		evtman:           events.NewEventManager(evtPersister),
-		passport:         identity.NewPassport(h, identity.NewMemCache(10_000)),
+		signerHub: NewSignerHub(),
+		evtman:    events.NewEventManager(evtPersister),
+		passport:  identity.NewPassport(h, identity.NewMemCache(10_000)),
 
 		dbName:     args.DbName,
 		ipfsConfig: args.IPFSConfig,
@@ -513,7 +511,6 @@ func (s *Server) addRoutes() {
 	r.Post("/xrpc/com.atproto.server.createAccount", s.handleCreateAccount)
 	r.Post("/xrpc/com.atproto.server.createSession", s.handleCreateSession)
 	r.Get("/xrpc/com.atproto.server.describeServer", s.handleDescribeServer)
-	r.Post("/xrpc/com.atproto.server.reserveSigningKey", s.handleServerReserveSigningKey)
 
 	r.Get("/xrpc/com.atproto.repo.describeRepo", s.handleDescribeRepo)
 	r.Get("/xrpc/com.atproto.sync.listRepos", s.handleListRepos)
@@ -626,7 +623,6 @@ func (s *Server) Serve(ctx context.Context) error {
 		&models.RefreshToken{},
 		&models.Record{},
 		&models.Blob{},
-		&models.ReservedKey{},
 		&provider.OauthToken{},
 		&provider.OauthAuthorizationRequest{},
 	); err != nil {
@@ -634,8 +630,6 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 
 	logger.Info("starting vow")
-
-	s.serviceAuthCache.startEvictionLoop(ctx)
 
 	go func() {
 		if err := s.httpd.ListenAndServe(); err != nil && err != http.ErrServerClosed {

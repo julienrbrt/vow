@@ -1,10 +1,16 @@
 package server
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -82,4 +88,119 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, 200, map[string]string{
 		"token": token,
 	})
+}
+
+// signServiceAuthJWT returns a signed ES256K service-auth JWT for the given
+// (aud, lxm) pair, reusing a cached token when possible. Only when no cached
+// token is available does it send a signing request to the user's wallet via
+// the SignerHub WebSocket.
+//
+// The returned string is a fully formed "header.payload.signature" JWT ready to
+// be placed in an Authorization: Bearer header.
+//
+// lxm may be empty, in which case no "lxm" claim is included.
+func (s *Server) signServiceAuthJWT(
+	ctx context.Context,
+	repo *models.RepoActor,
+	aud string,
+	lxm string,
+	exp int64,
+) (string, error) {
+	if len(repo.PublicKey) == 0 {
+		return "", fmt.Errorf("no public key registered for account %s", repo.Repo.Did)
+	}
+
+	did := repo.Repo.Did
+
+	// ── Build header + payload ────────────────────────────────────────────
+	header := map[string]string{
+		"alg": "ES256K",
+		"crv": "secp256k1",
+		"typ": "JWT",
+	}
+	hj, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("marshaling JWT header: %w", err)
+	}
+	encHeader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
+
+	now := time.Now().Unix()
+	var expiresAt time.Time
+	if exp == 0 {
+		expiresAt = time.Now().Add(5 * time.Minute)
+		exp = expiresAt.Unix()
+	} else {
+		expiresAt = time.Unix(exp, 0)
+	}
+
+	claims := map[string]any{
+		"iss": did,
+		"aud": aud,
+		"jti": uuid.NewString(),
+		"exp": exp,
+		"iat": now,
+	}
+	if lxm != "" {
+		claims["lxm"] = lxm
+	}
+
+	pj, err := json.Marshal(claims)
+	if err != nil {
+		return "", fmt.Errorf("marshaling JWT payload: %w", err)
+	}
+	encPayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
+
+	// signingInput is what the JWT spec calls the "message to be signed":
+	// base64url(header) + "." + base64url(payload).
+	signingInput := encHeader + "." + encPayload
+
+	// The wallet signs the SHA-256 hash of the signing input, which is what
+	// ES256K requires. We pass the raw signingInput bytes as the payload;
+	// HashAndVerifyLenient on the verification side hashes them before
+	// verifying, matching what personal_sign does after EIP-191 prefix
+	// stripping (or eth_sign which skips the prefix).
+	//
+	// We send the SHA-256 pre-image (the signingInput string) rather than the
+	// hash so the signer can display it meaningfully and so the wallet can
+	// apply its own hashing. This matches the pattern used for commit signing.
+	hash := sha256.Sum256([]byte(signingInput))
+	payloadB64 := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	requestID := uuid.NewString()
+	signerDeadline := time.Now().Add(signerRequestTimeout)
+
+	ops := []PendingWriteOp{
+		{
+			Type:       "service_auth",
+			Collection: aud,
+			Rkey:       lxm,
+		},
+	}
+
+	msgBytes, err := buildSignRequestMsg(requestID, did, payloadB64, ops, signerDeadline)
+	if err != nil {
+		return "", fmt.Errorf("building sign request message: %w", err)
+	}
+
+	signCtx, cancel := context.WithDeadline(ctx, signerDeadline)
+	defer cancel()
+
+	sigBytes, err := s.signerHub.RequestSignature(signCtx, did, requestID, msgBytes)
+	if err != nil {
+		return "", err
+	}
+
+	// sigBytes is the raw compact (r||s) or EIP-191 signature returned by the
+	// wallet. Trim to 64 bytes (r||s) if the wallet appended a recovery byte.
+	if len(sigBytes) == 65 {
+		sigBytes = sigBytes[:64]
+	}
+	if len(sigBytes) != 64 {
+		return "", fmt.Errorf("unexpected signature length %d (want 64)", len(sigBytes))
+	}
+
+	encSig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(sigBytes), "=")
+	token := signingInput + "." + encSig
+
+	return token, nil
 }

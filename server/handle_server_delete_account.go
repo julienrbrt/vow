@@ -40,7 +40,6 @@ func (s *Server) deleteAccountByDid(ctx context.Context, did string) error {
 		"DELETE FROM blobs WHERE did = ?",
 		"DELETE FROM tokens WHERE did = ?",
 		"DELETE FROM refresh_tokens WHERE did = ?",
-		"DELETE FROM reserved_keys WHERE did = ?",
 		"DELETE FROM invite_codes WHERE did = ?",
 		"DELETE FROM actors WHERE did = ?",
 		"DELETE FROM repos WHERE did = ?",

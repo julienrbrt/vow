@@ -120,13 +120,6 @@ type Blob struct {
 	RefCount  int
 }
 
-type ReservedKey struct {
-	KeyDid     string  `gorm:"primaryKey"`
-	Did        *string `gorm:"index"`
-	PrivateKey []byte
-	CreatedAt  time.Time `gorm:"index"`
-}
-
 type EventRecord struct {
 	Seq       int64 `gorm:"primaryKey;autoIncrement:false"`
 	CreatedAt time.Time
