@@ -8,10 +8,9 @@ Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 ## Features
 
 - ✅ **IPFS storage** — repo blocks and blobs are stored on a local Kubo node and indexed in SQLite by DID and CID.
-- ✅ **Keyless PDS** — the server never stores a private key. Every write is signed by the user's secp256k1 key in their Ethereum wallet (Rabby, MetaMask, etc.).
-- ✅ **Browser signer** — the account page connects over WebSocket and signs repo commits and PLC operations with the user's Ethereum wallet. No browser extension is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
-- ✅ **User-controlled DID** — when the user registers a key, the PDS transfers the `did:plc` rotation key to the user's wallet. After that, only the user can change their identity.
-- 🔜 **x402 payments for IPFS storage** — blob uploads will be gated by on-chain payments via the [x402 protocol](https://x402.org), using the same Ethereum wallet.
+- ✅ **Keyless PDS** — the server never stores a private key. Every write is signed by the user's passkey (WebAuthn/FIDO2) registered during onboarding.
+- ✅ **Browser signer** — the account page connects over WebSocket and signs repo commits and PLC operations with the user's passkey. No browser extension or extra software is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
+- ✅ **User-controlled DID** — when the user registers a key, the PDS transfers the `did:plc` rotation key to the user's passkey-derived public key. After that, only the user can change their identity.
 
 ## Quick Start with Docker Compose
 
@@ -99,7 +98,7 @@ Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
 ### Reverse Proxy
 
-You need a reverse proxy (nginx, Caddy, etc.) in front of both services:
+You need a reverse proxy (nginx, Caddy, etc.) in front of the PDS:
 
 | Service | Internal address | Purpose                       |
 | ------- | ---------------- | ----------------------------- |
@@ -131,7 +130,7 @@ VOW_IPFS_NODE_URL="http://127.0.0.1:5001"
 VOW_IPFS_GATEWAY_URL="https://ipfs.example.com"
 ```
 
-`VOW_IPFS_NODE_URL` is the only required IPFS setting. The local Kubo node is the only storage backend for now; remote pinning will come later through x402 payments.
+`VOW_IPFS_NODE_URL` is the only required IPFS setting.
 
 ### SMTP Email
 
@@ -148,41 +147,41 @@ VOW_SMTP_NAME="Vow PDS"
 
 The PDS holds two keys:
 
-- **Rotation key** (`rotation.key`) — a secp256k1 key used for DID genesis operations and for signing the PLC operation that transfers control to the user's wallet during `supplySigningKey`. It is never used to sign user content.
+- **Rotation key** (`rotation.key`) — a secp256k1 key used for DID genesis operations and for signing the PLC operation that transfers control to the user's passkey during `supplySigningKey`. It is never used to sign user content.
 - **JWK key** (`jwk.key`) — a P-256 ECDSA key used exclusively to sign ATProto session JWTs (access and refresh tokens) and OAuth tokens. It has no role in repo writes or identity operations.
 
 Neither key is ever used to sign repo commits or service-auth JWTs.
 
-Every repo write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's Ethereum wallet returns a signature through the browser signer on the account page.
+Every repo write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's passkey returns a signature through the browser signer on the account page.
 
 #### End-to-end signing flow
 
 Standard ATProto clients do not need to know about this flow. The PDS keeps the HTTP request open while it waits for the signature, then responds normally.
 
 ```
-ATProto client          PDS (vow)                  Account page (browser)   Ethereum wallet
+ATProto client          PDS (vow)                  Account page (browser)   Passkey (WebAuthn)
       |                     |                               |                      |
       |-- createRecord ----->|                               |                      |
       |                     |-- 1. build unsigned commit     |                      |
       |                     |-- 2. push signing request      |                      |
       |                     |      over WebSocket ---------->|                      |
-      |   (HTTP held open,  |                               |-- personal_sign() --->|
-      |    up to 30 s)      |                               |<-- signature ---------|
+      |   (HTTP held open,  |                               |-- navigator           |
+      |    up to 30 s)      |                               |   .credentials.get()->|
+      |                     |                               |<-- assertion ---------|
       |                     |<-- 3. signature over WS -------|                      |
       |                     |-- 4. verify signature          |                      |
       |                     |-- 5. finalise & persist commit |                      |
       |<-- 200 result -------|                               |                      |
 ```
 
-**What requires a wallet signature:**
+**What requires a passkey signature:**
 
-Only operations that change the user's repo content, or identity operations after the user has taken ownership of their rotation key, need a wallet signature:
+Only operations that change the user's repo content, or identity operations after the user has taken ownership of their rotation key, need a passkey signature:
 
 - **Repo writes** — `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`
-- **Identity operations** — PLC operations and handle updates, **once the user's wallet key is the rotation key**. Before that, the PDS rotation key signs them directly.
-- **x402 payments** — EIP-712 payment authorisations for gated pinning
+- **Identity operations** — PLC operations and handle updates, **once the user's passkey is the rotation key**. Before that, the PDS rotation key signs them directly.
 
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are also signed by the user's wallet via the signer WebSocket — the wallet tab must be open for these to succeed.
+Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the passkey. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are also signed by the user's passkey via the signer WebSocket — the signer tab must be open for these to succeed.
 
 #### WebSocket connection
 
@@ -223,7 +222,7 @@ Authorization: Bearer <access-token>
 {
   "type": "sign_response",
   "requestId": "uuid",
-  "signature": "<base64url-encoded EIP-191 signature bytes>"
+  "signature": "<base64url-encoded signature bytes>"
 }
 ```
 
@@ -238,7 +237,7 @@ Authorization: Bearer <access-token>
 
 ### Browser-Based Signer
 
-The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically.
+The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically via the platform's passkey prompt (biometric, PIN, or security key).
 
 ## Identity & DID Sovereignty
 
@@ -254,29 +253,32 @@ Vow uses a two-phase model:
 
 **Phase 1 — Account creation.** `createAccount` works like standard ATProto: the PDS creates the `did:plc` with its own rotation key.
 
-**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, the PDS submits one PLC operation that makes the user's wallet key both the signing key and the **only rotation key**, removing the PDS key from the DID document. After that, only the user's Ethereum wallet can authorise future PLC operations. The PDS rotation key file is not destroyed — it continues to be used for DID genesis when new accounts register — but it no longer has any authority over this user's DID document.
+**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, a new passkey is created via the WebAuthn API (`navigator.credentials.create()`). The PDS receives the public key from the attestation response, then submits a PLC operation that makes the user's passkey-derived key both the signing key and the **only rotation key**, removing the PDS key from the DID document. After that, only the user's passkey can authorise future PLC operations. The PDS rotation key file is not destroyed — it continues to be used for DID genesis when new accounts register — but it no longer has any authority over this user's DID document.
 
 ### What the user gets
 
 | Property                    | Before key registration    | After key registration                            |
 | --------------------------- | -------------------------- | ------------------------------------------------- |
-| Who signs commits           | Nobody (no key registered) | User's wallet                                     |
-| Who controls the DID        | PDS rotation key           | User's wallet key                                 |
+| Who signs commits           | Nobody (no key registered) | User's passkey                                    |
+| Who controls the DID        | PDS rotation key           | User's passkey-derived key                        |
 | PDS can hijack identity     | Yes                        | **No**                                            |
 | User can migrate to new PDS | No (PDS must cooperate)    | **Yes** (sign a PLC op to update serviceEndpoint) |
 | Federation compatibility    | Full                       | Full (unchanged)                                  |
 
 ### Verifiability
 
-The transfer is publicly verifiable. The PLC audit log at `plc.directory` shows the full history of rotation key changes. After `supplySigningKey`, the log shows the PDS rotation key being replaced by the user's wallet `did:key`.
+The transfer is publicly verifiable. The PLC audit log at `plc.directory` shows the full history of rotation key changes. After `supplySigningKey`, the log shows the PDS rotation key being replaced by the user's passkey-derived `did:key`.
 
-### Why not `did:key` or on-chain?
+### Why passkeys instead of Ethereum wallets?
 
-- **`did:key`** — elegant, but current ATProto AppViews and relays do not resolve it.
-- **On-chain registry** — fully trustless, but every PDS would need blockchain support.
-- **`did:web`** — if hosted on the PDS domain, the PDS controls it. If hosted on the user's domain, most users do not have one.
+The original Vow design used Ethereum wallets (MetaMask, Rabby, etc.) and `personal_sign` / EIP-191 for commit signing. In practice, verifying Ethereum-style message hashes against ATProto's expected signature format proved unreliable — the EIP-191 prefix and keccak256 hashing are incompatible with how ATProto verifiers check secp256k1 signatures.
 
-`did:plc` with rotation key transfer is the pragmatic choice: it works with existing ATProto implementations today and gives users real control over their identity.
+Passkeys (WebAuthn/FIDO2) solve this:
+
+- **No browser extension required** — passkeys are built into every modern browser and OS.
+- **Hardware-backed security** — the private key lives in a secure enclave (TPM, Secure Enclave, or a roaming authenticator like a YubiKey). It never leaves the device.
+- **Familiar UX** — users authenticate with a fingerprint, face scan, or PIN instead of confirming a cryptographic message in a wallet popup.
+- **Correct signature format** — the passkey signs raw bytes with standard ECDSA, producing signatures that ATProto verifiers accept without transformation.
 
 ## Management Commands
 
@@ -389,6 +391,5 @@ Vow is based on [Cocoon](https://tangled.org/hailey.at/cocoon). Many thanks for 
 | IPFS repo block storage | ✅ (Kubo)  | ❌     |
 | Email 2FA               | ❌ removed | ✅     |
 | BYOK (keyless PDS)      | ✅         | ❌     |
-| Ethereum wallet signer  | ✅         | ❌     |
+| Passkey signer          | ✅         | ❌     |
 | User-sovereign DID      | ✅         | ❌     |
-| x402 payments for IPFS  | ✅         | ❌     |
