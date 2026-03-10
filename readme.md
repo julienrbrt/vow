@@ -9,7 +9,7 @@ Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
 - ✅ **IPFS storage** — repo blocks and blobs are stored on a local Kubo node and indexed in SQLite by DID and CID.
 - ✅ **Keyless PDS** — the server never stores a private key. Every write is signed by the user's secp256k1 key in their Ethereum wallet (Rabby, MetaMask, etc.).
-- ✅ **Browser signer** — the account page connects over WebSocket and signs commits with the user's Ethereum wallet. No browser extension is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
+- ✅ **Browser signer** — the account page connects over WebSocket and signs repo commits and PLC operations with the user's Ethereum wallet. No browser extension is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
 - ✅ **User-controlled DID** — when the user registers a key, the PDS transfers the `did:plc` rotation key to the user's wallet. After that, only the user can change their identity.
 - 🔜 **x402 payments for IPFS storage** — blob uploads will be gated by on-chain payments via the [x402 protocol](https://x402.org), using the same Ethereum wallet.
 
@@ -146,7 +146,9 @@ VOW_SMTP_NAME="Vow PDS"
 
 ### BYOK (Bring Your Own Key)
 
-The PDS **never stores or uses a private key**. Every write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's Ethereum wallet returns a signature through the browser signer on the account page.
+The PDS holds one key — the **rotation key** — used only for lightweight PDS-level operations (service-auth JWTs, genesis DID creation, and PLC operations before the user has registered their wallet). It is never used to sign user content.
+
+Every repo write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's Ethereum wallet returns a signature through the browser signer on the account page.
 
 #### End-to-end signing flow
 
@@ -169,21 +171,13 @@ ATProto client          PDS (vow)                  Account page (browser)   Ethe
 
 **What requires a wallet signature:**
 
-Only operations that change the user's repo or identity need a wallet signature:
+Only operations that change the user's repo content, or identity operations after the user has taken ownership of their rotation key, need a wallet signature:
 
 - **Repo writes** — `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`
-- **Identity operations** — PLC operations, handle updates
+- **Identity operations** — PLC operations and handle updates, **once the user's wallet key is the rotation key**. Before that, the PDS rotation key signs them directly.
 - **x402 payments** — EIP-712 payment authorisations for gated pinning
 
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. The PDS proxies them to the AppView using cached service-auth JWTs — see [Service auth caching](#service-auth-caching) below.
-
-#### Service auth caching
-
-In standard ATProto, the PDS signs service-auth JWTs itself because it holds the signing key. In Vow, the signing key is in the user's wallet, so without caching, every proxied request (feeds, profiles, notifications, and so on) would trigger a wallet prompt.
-
-Vow solves this by **caching service-auth JWTs**. When the proxy needs a token for an `(aud, lxm)` pair, it checks an in-memory cache first. Only a cache miss triggers a wallet signing request. Cached tokens live for 30 minutes with a 15-second reuse margin, so in practice the wallet is prompted at most **once every ~30 minutes per remote service endpoint** instead of on every request.
-
-Tokens requested explicitly via `com.atproto.server.getServiceAuth` (where the caller controls the expiry) bypass the cache and always go to the wallet.
+Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. Service-auth JWTs for proxied requests are signed directly by the PDS rotation key — fast, in-process, no wallet involved.
 
 #### WebSocket connection
 
@@ -345,7 +339,6 @@ docker compose up -d
 - [x] `com.atproto.server.requestEmailConfirmation`
 - [x] `com.atproto.server.requestEmailUpdate`
 - [x] `com.atproto.server.requestPasswordReset`
-- [x] `com.atproto.server.reserveSigningKey`
 - [x] `com.atproto.server.resetPassword`
 - [x] `com.atproto.server.updateEmail`
 
