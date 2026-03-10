@@ -19,8 +19,6 @@ const (
 	flagSmtpName             = "smtp-name"
 	flagIpfsNodeUrl          = "ipfs-node-url"
 	flagIpfsGatewayUrl       = "ipfs-gateway-url"
-	flagX402PinURL           = "x402-pin-url"
-	flagX402Network          = "x402-network"
 	flagSessionSecret        = "session-secret"
 	flagSessionCookieKey     = "session-cookie-key"
 	flagFallbackProxy        = "fallback-proxy"

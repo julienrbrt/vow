@@ -82,11 +82,6 @@ services:
       VOW_IPFS_NODE_URL: ${VOW_IPFS_NODE_URL:-http://ipfs:5001}
       # Optional public gateway for sync.getBlob redirects.
       VOW_IPFS_GATEWAY_URL: ${VOW_IPFS_GATEWAY_URL:-}
-      # Optional x402-gated remote pinning service.
-      VOW_X402_PIN_URL: ${VOW_X402_PIN_URL:-}
-      # CAIP-2 chain ID for x402 pinning.
-      VOW_X402_NETWORK: ${VOW_X402_NETWORK:-eip155:8453}
-
       # Optional fallback for proxied ATProto requests.
       # Format: did#service-id, for example did:plc:xxx#atproto_labeler
       VOW_FALLBACK_PROXY: ${VOW_FALLBACK_PROXY:-}

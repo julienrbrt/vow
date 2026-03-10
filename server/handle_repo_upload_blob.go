@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -70,29 +69,6 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 		logger.Error("error adding blob to ipfs", "error", err)
 		helpers.ServerError(w, nil)
 		return
-	}
-
-	// If the account has opted into x402 remote pinning and the signer
-	// is connected, kick off the payment+pin flow in the
-	// background. The blob is already safe on the local Kubo node so this
-	// is best-effort — a failure here does not affect the ATProto response.
-	if urepo.X402PinningEnabled && s.ipfsConfig.X402 != nil {
-		walletAddr := urepo.EthereumAddress()
-		if walletAddr == "" {
-			logger.Warn("x402 pinning enabled but no public key registered; skipping", "cid", c.String())
-		} else if !s.signerHub.IsConnected(urepo.Repo.Did) {
-			logger.Warn("x402 pinning enabled but signer not connected; skipping", "cid", c.String())
-		} else {
-			cidStr := c.String()
-			blobSize := read
-			go func() {
-				pinCtx, cancel := context.WithTimeout(context.Background(), 2*signerRequestTimeout)
-				defer cancel()
-				if err := s.pinBlobWithX402(pinCtx, urepo.Repo.Did, walletAddr, cidStr, blobSize); err != nil {
-					logger.Warn("x402 remote pin failed", "cid", cidStr, "error", err)
-				}
-			}()
-		}
 	}
 
 	// Persist a metadata row so we can list blobs by DID, resolve ownership,

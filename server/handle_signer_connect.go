@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -42,19 +41,11 @@ type wsSignRequest struct {
 }
 
 // wsIncoming is used for initial type-sniffing before full decode.
-// It covers both commit signing (sign_response / sign_reject) and
-// x402 payment signing (pay_response / pay_reject).
 type wsIncoming struct {
 	Type      string `json:"type"`
 	RequestID string `json:"requestId"`
-	// sign_response: base64url-encoded EIP-191 signature bytes.
+	// sign_response: base64url-encoded signature bytes.
 	Signature string `json:"signature,omitempty"`
-	// pay_response: 0x-prefixed hex-encoded EIP-712 signature returned by
-	// eth_signTypedData_v4. The PDS passes these bytes directly to the x402
-	// SDK to assemble the final PaymentPayload.
-	// Note: the field is also named "signature" in the pay_response JSON so
-	// that the signer can use a single builder function; we distinguish the
-	// two cases by message type.
 }
 
 // handleSignerConnect upgrades the connection to a WebSocket and registers it
@@ -215,7 +206,6 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 		case in := <-inbound:
 			switch in.Type {
 			case "sign_response":
-				// signature is base64url-encoded EIP-191 bytes.
 				if in.Signature == "" {
 					logger.Warn("signer: sign_response missing signature", "did", did)
 					continue
@@ -232,29 +222,6 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 			case "sign_reject":
 				if !s.signerHub.DeliverRejection(did, in.RequestID) {
 					logger.Warn("signer: sign_reject for unknown requestId", "did", did, "requestId", in.RequestID)
-				}
-
-			case "pay_response":
-				// signature is the 0x-prefixed hex-encoded EIP-712 signature
-				// returned by eth_signTypedData_v4. The x402 SDK receives these
-				// raw bytes and assembles the PaymentPayload itself.
-				if in.Signature == "" {
-					logger.Warn("signer: pay_response missing signature", "did", did)
-					continue
-				}
-				hexStr := strings.TrimPrefix(in.Signature, "0x")
-				sigBytes, err := hex.DecodeString(hexStr)
-				if err != nil {
-					logger.Warn("signer: pay_response bad hex", "did", did, "error", err)
-					continue
-				}
-				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
-					logger.Warn("signer: pay_response for unknown requestId", "did", did, "requestId", in.RequestID)
-				}
-
-			case "pay_reject":
-				if !s.signerHub.DeliverRejection(did, in.RequestID) {
-					logger.Warn("signer: pay_reject for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
 
 			default:

@@ -51,23 +51,6 @@ const (
 // alongside. All repo blocks and blob data are stored on and retrieved from
 // the co-located Kubo node — SQLite is used only for relational metadata
 // (accounts, sessions, records index, etc.), not for content.
-// X402Config holds the configuration for the optional x402-gated remote
-// pinning service. When set, accounts that have opted in will have their
-// blobs pinned there after being written to the local Kubo node, with the
-// payment authorised by the user's Ethereum wallet via the browser-based signer.
-type X402Config struct {
-	// PinURL is the base URL of the x402-gated pinning endpoint,
-	// e.g. "https://402.pinata.cloud/v1/pin/public". The PDS POSTs to this
-	// URL with the blob size, receives a 402 with payment requirements, asks
-	// the signer to sign the EIP-3009 payment authorisation, then retries
-	// the request with the X-PAYMENT header.
-	PinURL string
-
-	// Network is the CAIP-2 chain identifier required by the pinning service,
-	// e.g. "eip155:8453" for Base Mainnet.
-	Network string
-}
-
 type IPFSConfig struct {
 	// NodeURL is the base URL of the Kubo RPC API, e.g. "http://ipfs:5001"
 	// in Docker or "http://127.0.0.1:5001" locally.
@@ -77,10 +60,6 @@ type IPFSConfig struct {
 	// "http://ipfs:8080" or "https://ipfs.io". When set, sync.getBlob
 	// redirects clients to the gateway instead of proxying through vow.
 	GatewayURL string
-
-	// X402 is optional. When non-nil, accounts with X402PinningEnabled=true
-	// will have their content additionally pinned via the x402 protocol.
-	X402 *X402Config
 }
 
 type Server struct {

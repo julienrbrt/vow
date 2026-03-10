@@ -29,11 +29,6 @@ type Repo struct {
 	Root        []byte
 	Preferences []byte
 	Deactivated bool
-	// X402PinningEnabled controls whether blobs and repo blocks are
-	// additionally pinned to a remote x402-gated pinning service after being
-	// written to the local Kubo node. When false (the default) content lives
-	// only on the co-located node.
-	X402PinningEnabled bool `gorm:"default:false"`
 }
 
 // EthereumAddress returns the Ethereum address for PublicKey.

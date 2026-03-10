@@ -2,10 +2,8 @@ package server
 
 import (
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -128,26 +126,6 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 			case "sign_reject":
 				if !s.signerHub.DeliverRejection(did, in.RequestID) {
 					logger.Warn("signer: sign_reject for unknown requestId", "did", did, "requestId", in.RequestID)
-				}
-
-			case "pay_response":
-				if in.Signature == "" {
-					logger.Warn("signer: pay_response missing signature", "did", did)
-					continue
-				}
-				hexStr := strings.TrimPrefix(in.Signature, "0x")
-				sigBytes, err := hex.DecodeString(hexStr)
-				if err != nil {
-					logger.Warn("signer: pay_response bad hex", "did", did, "error", err)
-					continue
-				}
-				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
-					logger.Warn("signer: pay_response for unknown requestId", "did", did, "requestId", in.RequestID)
-				}
-
-			case "pay_reject":
-				if !s.signerHub.DeliverRejection(did, in.RequestID) {
-					logger.Warn("signer: pay_reject for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
 
 			default:

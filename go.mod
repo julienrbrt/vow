@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/bluesky-social/indigo v0.0.0-20260203235305-a86f3ae1f8ec
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792
-	github.com/coinbase/x402/go v0.0.0-20260309144830-34d2442cbf06
 	github.com/domodwyer/mailyak/v3 v3.6.2
 	github.com/ethereum/go-ethereum v1.17.1
 	github.com/glebarez/sqlite v1.11.0
@@ -39,14 +38,10 @@ require (
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/RussellLuo/slidingwindow v0.0.0-20200528002341-535bb99d338b // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.20.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/consensys/gnark-crypto v0.18.1 // indirect
-	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/earthboundkid/versioninfo/v2 v2.24.1 // indirect
-	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
@@ -121,7 +116,6 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
-	github.com/supranational/blst v0.3.16 // indirect
 	gitlab.com/yawning/secp256k1-voi v0.0.0-20230925100816-f2616030848b // indirect
 	gitlab.com/yawning/tuplehash v0.0.0-20230713102510-df83abbf9a02 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
