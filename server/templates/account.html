@@ -12,15 +12,33 @@
         <main
             class="container base-container authorize-container margin-top-xl"
         >
-            <h2>Welcome, {{ .Handle }}</h2>
-            <p style="margin-top: -0.5em; margin-bottom: 0.5em">
-                <small style="opacity: 0.7; font-family: monospace"
-                    >{{ .Did }}</small
+            <div
+                style="
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: baseline;
+                "
+            >
+                <div>
+                    <h2 style="margin-bottom: 0">Welcome, {{ .Handle }}</h2>
+                    <p style="margin-top: 0.15em; margin-bottom: 0.5em">
+                        <small style="opacity: 0.7; font-family: monospace"
+                            >{{ .Did }}</small
+                        >
+                    </p>
+                </div>
+                <a
+                    href="/account/signout"
+                    role="button"
+                    class="outline secondary"
+                    style="
+                        font-size: 0.85em;
+                        padding: 0.35em 0.9em;
+                        white-space: nowrap;
+                    "
+                    >Sign Out</a
                 >
-            </p>
-            <ul>
-                <li><a href="/account/signout">Sign Out</a></li>
-            </ul>
+            </div>
 
             {{ if .flashes.successes }}
             <div class="alert alert-success margin-bottom-xs">

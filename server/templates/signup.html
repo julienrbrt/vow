@@ -77,14 +77,35 @@
                     value="{{ .QueryParams }}"
                 />
 
-                <button class="primary" type="submit">Create Account</button>
+                <button id="btn-submit" class="primary" type="submit">
+                    Create Account
+                </button>
             </form>
             <p style="margin-top: 1em; text-align: center">
                 Already have an account?
-                <a href="/account/signin{{ if .QueryParams }}?{{ .QueryParams }}{{ end }}"
+                <a
+                    href="/account/signin{{ if .QueryParams }}?{{ .QueryParams }}{{ end }}"
                     >Sign in</a
                 >
             </p>
         </main>
+        <script>
+            (function () {
+                const form = document.querySelector("form");
+                const btn = document.getElementById("btn-submit");
+                let submitted = false;
+
+                form.addEventListener("submit", function (event) {
+                    if (submitted) {
+                        event.preventDefault();
+                        return;
+                    }
+                    submitted = true;
+                    btn.disabled = true;
+                    btn.textContent = "Creating account…";
+                    btn.setAttribute("aria-busy", "true");
+                });
+            })();
+        </script>
     </body>
 </html>

@@ -34,7 +34,12 @@
                     type="hidden"
                     value="{{ .QueryParams }}"
                 />
-                <button class="primary" type="submit" value="Login">
+                <button
+                    id="btn-submit"
+                    class="primary"
+                    type="submit"
+                    value="Login"
+                >
                     Login
                 </button>
             </form>
@@ -46,5 +51,23 @@
                 >
             </p>
         </main>
+        <script>
+            (function () {
+                const form = document.querySelector("form");
+                const btn = document.getElementById("btn-submit");
+                let submitted = false;
+
+                form.addEventListener("submit", function (event) {
+                    if (submitted) {
+                        event.preventDefault();
+                        return;
+                    }
+                    submitted = true;
+                    btn.disabled = true;
+                    btn.textContent = "Signing in…";
+                    btn.setAttribute("aria-busy", "true");
+                });
+            })();
+        </script>
     </body>
 </html>
