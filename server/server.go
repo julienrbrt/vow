@@ -622,7 +622,6 @@ func (s *Server) Serve(ctx context.Context) error {
 		&models.InviteCode{},
 		&models.InviteCodeUse{},
 
-		&models.PendingWrite{},
 		&models.Token{},
 		&models.RefreshToken{},
 		&models.Record{},

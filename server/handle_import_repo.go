@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
@@ -108,18 +107,11 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	tx.Commit()
 
-	// The PDS never holds the user's private key. We generate an ephemeral key
-	// solely to produce a valid commit block for the imported repo. The user
-	// must call supplySigningKey via the account page after import so that
-	// subsequent writes can be signed correctly.
-	ephemeralKey, err := atcrypto.GeneratePrivateKeyK256()
-	if err != nil {
-		logger.Error("error generating ephemeral key for import commit", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-
-	root, rev, err := commitRepo(ctx, bs, atRepo, ephemeralKey.Bytes())
+	// Sign the import commit with the PDS rotation key instead of a throwaway
+	// ephemeral key. The user can supply their own signing key later via the
+	// account page; subsequent writes require a registered public key and a
+	// connected signer.
+	root, rev, err := commitRepo(ctx, bs, atRepo, s.plcClient.RotationKeyBytes())
 	if err != nil {
 		logger.Error("error committing", "error", err)
 		helpers.ServerError(w, nil)

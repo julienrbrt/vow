@@ -85,24 +85,6 @@ type InviteCodeUse struct {
 	UsedAt time.Time
 }
 
-// PendingWrite represents a write (or PLC operation) that has been prepared by
-// the PDS and is waiting for the user's client to sign it. Once the signature
-// is submitted via handleSubmitSignature the stored CommitData is used to
-// finalise the commit without the PDS ever having held the private key.
-type PendingWrite struct {
-	ID          string `gorm:"primaryKey"`
-	Did         string `gorm:"index"`
-	PayloadHash string
-	// Bytes to sign.
-	Payload []byte
-	// Original request.
-	Data []byte
-	// Serialized commit state.
-	CommitData []byte
-	CreatedAt  time.Time
-	ExpiresAt  time.Time `gorm:"index"`
-}
-
 type Token struct {
 	Token        string `gorm:"primaryKey"`
 	Did          string `gorm:"index"`

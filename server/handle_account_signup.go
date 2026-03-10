@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	atp "github.com/bluesky-social/indigo/atproto/repo"
 	"github.com/bluesky-social/indigo/atproto/repo/mst"
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -140,14 +139,7 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	k, err := atcrypto.GeneratePrivateKeyK256()
-	if err != nil {
-		logger.Error("error generating ephemeral key", "error", err)
-		fail("Something went wrong. Please try again.")
-		return
-	}
-
-	did, op, err := s.plcClient.CreateDID(k, "", handle)
+	did, op, err := s.plcClient.CreateDID(s.plcClient.RotationPrivateKey(), "", handle)
 	if err != nil {
 		logger.Error("error creating PLC DID", "error", err)
 		fail("Something went wrong. Please try again.")
@@ -202,7 +194,7 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		RecordStore: bs,
 	}
 
-	root, rev, err := commitRepo(ctx, bs, repo, k.Bytes())
+	root, rev, err := commitRepo(ctx, bs, repo, s.plcClient.RotationKeyBytes())
 	if err != nil {
 		logger.Error("error committing genesis", "error", err)
 		fail("Something went wrong. Please try again.")

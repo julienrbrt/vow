@@ -305,9 +305,8 @@ func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *Marshala
 // TODO make use of swap commit
 // pendingCommitState captures everything produced by the MST-building phase of
 // applyWrites that is needed to finalise the commit once a signature arrives.
-// It is JSON-serialised into models.PendingWrite.CommitData so that
-// finaliseWriteFromSignature can reconstruct it without re-running the MST
-// logic.
+// It is held in memory and passed directly to finaliseWriteFromState after the
+// SignerHub WebSocket round-trip completes.
 //
 // NOTE: block data is stored as raw bytes slices (base64 in JSON) because CIDs
 // and block objects are not JSON-serialisable out of the box with the standard

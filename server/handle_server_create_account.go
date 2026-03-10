@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
+
 	atp "github.com/bluesky-social/indigo/atproto/repo"
 	"github.com/bluesky-social/indigo/atproto/repo/mst"
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -159,45 +159,11 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For the genesis commit we use a temporary ephemeral key. The PDS never
-	// stores it — as soon as the commit is written the key is discarded. The
-	// user must call supplySigningKey (via the account page) before any
-	// subsequent write will succeed, because applyWrites requires a registered
-	// public key and a connected signer.
-	var k *atcrypto.PrivateKeyK256
-
-	if signupDid != "" {
-		reservedKey, err := s.getReservedKey(ctx, signupDid)
-		if err != nil {
-			logger.Error("error looking up reserved key", "error", err)
-		}
-		if reservedKey != nil {
-			k, err = atcrypto.ParsePrivateBytesK256(reservedKey.PrivateKey)
-			if err != nil {
-				logger.Error("error parsing reserved key", "error", err)
-				k = nil
-			} else {
-				defer func() {
-					if delErr := s.deleteReservedKey(ctx, reservedKey.KeyDid, reservedKey.Did); delErr != nil {
-						logger.Error("error deleting reserved key", "error", delErr)
-					}
-				}()
-			}
-		}
-	}
-
-	if k == nil {
-		// Generate an ephemeral key for the genesis commit only.
-		k, err = atcrypto.GeneratePrivateKeyK256()
-		if err != nil {
-			logger.Error("error generating ephemeral key", "endpoint", "com.atproto.server.createAccount", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-	}
+	// Use the PDS rotation key to sign the genesis commit. The user can supply their own signing key later via
+	// supplySigningKey; subsequent writes require a registered public key and a connected signer.
 
 	if signupDid == "" {
-		did, op, err := s.plcClient.CreateDID(k, "", request.Handle)
+		did, op, err := s.plcClient.CreateDID(s.plcClient.RotationPrivateKey(), "", request.Handle)
 		if err != nil {
 			logger.Error("error creating operation", "endpoint", "com.atproto.server.createAccount", "error", err)
 			helpers.ServerError(w, nil)
@@ -266,9 +232,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			RecordStore: bs,
 		}
 
-		// Sign the genesis commit with the ephemeral key. This key is never
-		// persisted; it is only used to produce a valid initial commit block.
-		root, rev, err := commitRepo(ctx, bs, r, k.Bytes())
+		// Sign the genesis commit with the PDS rotation key.
+		root, rev, err := commitRepo(ctx, bs, r, s.plcClient.RotationKeyBytes())
 		if err != nil {
 			logger.Error("error committing", "error", err)
 			helpers.ServerError(w, nil)

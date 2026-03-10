@@ -140,6 +140,20 @@ func (c *Client) RotationDIDKey() string {
 	return pub.DIDKey()
 }
 
+// RotationKeyBytes returns the raw bytes of the PDS rotation key. This allows
+// callers to use the rotation key to sign genesis commits instead of
+// generating a throwaway ephemeral key.
+func (c *Client) RotationKeyBytes() []byte {
+	return c.rotationKey.Bytes()
+}
+
+// RotationPrivateKey returns the PDS rotation key as a typed *atcrypto.PrivateKeyK256.
+// This allows callers to pass it directly to functions that expect a signing key,
+// such as CreateDID, without generating a throwaway ephemeral key.
+func (c *Client) RotationPrivateKey() *atcrypto.PrivateKeyK256 {
+	return c.rotationKey
+}
+
 // SignOp signs a PLC operation with the PDS rotation key. This is the only
 // key that can authorise changes to a did:plc document (until the rotation
 // key is transferred to the user via supplySigningKey).
