@@ -638,8 +638,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.serviceAuthCache.startEvictionLoop(ctx)
 
 	go func() {
-		if err := s.httpd.ListenAndServe(); err != nil {
-			panic(err)
+		if err := s.httpd.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("http server stopped unexpectedly", "err", err)
 		}
 	}()
 
