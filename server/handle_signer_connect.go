@@ -1,0 +1,311 @@
+package server
+
+import (
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
+)
+
+var wsUpgrader = websocket.Upgrader{
+	HandshakeTimeout: 10 * time.Second,
+	CheckOrigin: func(r *http.Request) bool {
+		// Origin validation is handled by the access-token check that runs
+		// before the upgrade. We accept any origin here so programmatic
+		// clients can connect regardless of their origin.
+		return true
+	},
+}
+
+// wsCloseTokenExpired is the WebSocket application close code the server sends
+// when it detects that the access token used to authenticate the signer
+// connection has expired mid-session. The client listens for this code and
+// triggers an immediate token refresh + reconnect rather than doing a back-off
+// retry.
+const wsCloseTokenExpired = 4001
+
+// wsSignRequest is the JSON envelope pushed to the signer for every write
+// operation that needs a user signature.
+type wsSignRequest struct {
+	Type      string           `json:"type"`      // always "sign_request"
+	RequestID string           `json:"requestId"` // UUID, echoed back in the response
+	Did       string           `json:"did"`
+	Payload   string           `json:"payload"`   // base64url-encoded unsigned commit CBOR
+	Ops       []PendingWriteOp `json:"ops"`       // human-readable summary shown to user
+	ExpiresAt string           `json:"expiresAt"` // RFC3339
+}
+
+// wsIncoming is used for initial type-sniffing before full decode.
+// It covers both commit signing (sign_response / sign_reject) and
+// x402 payment signing (pay_response / pay_reject).
+type wsIncoming struct {
+	Type      string `json:"type"`
+	RequestID string `json:"requestId"`
+	// sign_response: base64url-encoded EIP-191 signature bytes.
+	Signature string `json:"signature,omitempty"`
+	// pay_response: 0x-prefixed hex-encoded EIP-712 signature returned by
+	// eth_signTypedData_v4. The PDS passes these bytes directly to the x402
+	// SDK to assemble the final PaymentPayload.
+	// Note: the field is also named "signature" in the pay_response JSON so
+	// that the signer can use a single builder function; we distinguish the
+	// two cases by message type.
+}
+
+// handleSignerConnect upgrades the connection to a WebSocket and registers it
+// in the SignerHub. This is the Bearer-token-authenticated endpoint used by
+// programmatic clients. The browser-based signer uses handleAccountSigner
+// (cookie-authenticated) instead.
+//
+// From that point on the PDS drives the conversation:
+//
+//  1. When a write handler needs a signature it calls SignerHub.RequestSignature
+//     which pushes a signerRequest onto the conn.requests channel.
+//  2. This goroutine picks it up, writes the sign_request (or pay_request) JSON
+//     frame, and waits for a sign_response / pay_response or their reject
+//     counterparts from the client.
+//  3. The reply is forwarded back to the waiting write handler via the reply
+//     channel inside the signerRequest.
+//
+// The loop also handles WebSocket ping/pong: the server sends a ping every 20 s
+// and expects a pong within 10 s (gorilla handles pong automatically).
+//
+// Token expiry: if the access token used to open this connection expires while
+// the connection is alive, the server sends a close frame with code 4001. The
+// client handles this by refreshing the token immediately and reconnecting.
+func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
+	logger := s.logger.With("name", "handleSignerConnect")
+
+	// The middleware has already validated the access token and set contextKeyRepo.
+	repo, ok := getContextValue[*models.RepoActor](r, contextKeyRepo)
+	if !ok {
+		helpers.UnauthorizedError(w, nil)
+		return
+	}
+	did := repo.Repo.Did
+
+	// Ensure the account actually has a public key registered before accepting
+	// a signer connection; without it no signature can ever be verified.
+	if len(repo.PublicKey) == 0 {
+		helpers.InputError(w, new("no signing key registered for this account"))
+		return
+	}
+
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		// Upgrade writes its own error response on failure.
+		logger.Error("ws upgrade failed", "did", did, "error", err)
+		return
+	}
+	defer func() { _ = conn.Close() }()
+
+	logger.Info("signer connected (bearer)", "did", did)
+
+	// Register this connection with the hub, evicting any previous connection
+	// for the same DID.
+	sc := s.signerHub.Register(did)
+	defer s.signerHub.Unregister(did, sc)
+
+	// Configure the pong deadline handler: whenever a pong arrives we extend
+	// the read deadline by another 30 s.
+	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		logger.Error("signer: failed to set initial read deadline", "did", did, "error", err)
+		return
+	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	})
+
+	// pingTicker drives the server-side keep-alive. We send a ping every 20 s.
+	pingTicker := time.NewTicker(20 * time.Second)
+	defer pingTicker.Stop()
+
+	// tokenTicker checks whether the session token is still valid every minute.
+	// If it has expired we close with code 4001 so the client can refresh
+	// and reconnect immediately rather than waiting for a back-off retry.
+	tokenTicker := time.NewTicker(1 * time.Minute)
+	defer tokenTicker.Stop()
+
+	// Retrieve the raw token string that was used to open this connection so we
+	// can check its expiry claim periodically.
+	sessionToken, _ := getContextValue[string](r, contextKeyToken)
+
+	// readErr carries any error from the dedicated reader goroutine.
+	readErr := make(chan error, 1)
+
+	// inbound carries decoded messages from the reader goroutine.
+	inbound := make(chan wsIncoming, 4)
+
+	// Start the read pump in a separate goroutine because conn.ReadMessage
+	// blocks and we also need to be able to write (sign_request) concurrently.
+	ctx := r.Context()
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				readErr <- err
+				return
+			}
+			var in wsIncoming
+			if err := json.Unmarshal(msg, &in); err != nil {
+				logger.Warn("signer: unreadable message", "did", did, "error", err)
+				continue
+			}
+			select {
+			case inbound <- in:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		// ── keep-alive ping ──────────────────────────────────────────────
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				logger.Warn("signer: ping failed", "did", did, "error", err)
+				return
+			}
+
+		// ── periodic token expiry check ───────────────────────────────────
+		case <-tokenTicker.C:
+			if sessionToken != "" && isTokenExpired(sessionToken) {
+				logger.Info("signer: session token expired — closing with 4001", "did", did)
+				_ = conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(wsCloseTokenExpired, "token expired"),
+					time.Now().Add(5*time.Second),
+				)
+				return
+			}
+
+		// ── incoming message from signer ─────────────────────────────────
+		case in := <-inbound:
+			switch in.Type {
+			case "sign_response":
+				// signature is base64url-encoded EIP-191 bytes.
+				if in.Signature == "" {
+					logger.Warn("signer: sign_response missing signature", "did", did)
+					continue
+				}
+				sigBytes, err := base64.RawURLEncoding.DecodeString(in.Signature)
+				if err != nil {
+					logger.Warn("signer: sign_response bad base64url", "did", did, "error", err)
+					continue
+				}
+				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
+					logger.Warn("signer: sign_response for unknown requestId", "did", did, "requestId", in.RequestID)
+				}
+
+			case "sign_reject":
+				if !s.signerHub.DeliverRejection(did, in.RequestID) {
+					logger.Warn("signer: sign_reject for unknown requestId", "did", did, "requestId", in.RequestID)
+				}
+
+			case "pay_response":
+				// signature is the 0x-prefixed hex-encoded EIP-712 signature
+				// returned by eth_signTypedData_v4. The x402 SDK receives these
+				// raw bytes and assembles the PaymentPayload itself.
+				if in.Signature == "" {
+					logger.Warn("signer: pay_response missing signature", "did", did)
+					continue
+				}
+				hexStr := strings.TrimPrefix(in.Signature, "0x")
+				sigBytes, err := hex.DecodeString(hexStr)
+				if err != nil {
+					logger.Warn("signer: pay_response bad hex", "did", did, "error", err)
+					continue
+				}
+				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
+					logger.Warn("signer: pay_response for unknown requestId", "did", did, "requestId", in.RequestID)
+				}
+
+			case "pay_reject":
+				if !s.signerHub.DeliverRejection(did, in.RequestID) {
+					logger.Warn("signer: pay_reject for unknown requestId", "did", did, "requestId", in.RequestID)
+				}
+
+			default:
+				logger.Warn("signer: unknown message type", "did", did, "type", in.Type)
+			}
+
+		// ── new signing request from a write handler ──────────────────────
+		case req, ok := <-sc.requests:
+			if !ok {
+				// Channel was closed; connection is being evicted.
+				return
+			}
+
+			// Build the sign_request frame.
+			// The payload is already base64url-encoded by the caller (stored in
+			// req.msg as raw JSON). We use req.msg directly as it was assembled
+			// by buildSignRequestMsg or buildPayRequestMsg.
+			if err := conn.WriteMessage(websocket.TextMessage, req.msg); err != nil {
+				logger.Error("signer: failed to write request", "did", did, "error", err)
+				// Unblock the waiting write handler immediately.
+				req.reply <- signerReply{err: ErrSignerNotConnected}
+				return
+			}
+
+			logger.Info("signer: request sent", "did", did, "requestId", req.requestID)
+
+		// ── read pump died ────────────────────────────────────────────────
+		case err := <-readErr:
+			if websocket.IsUnexpectedCloseError(err,
+				websocket.CloseGoingAway,
+				websocket.CloseNormalClosure,
+			) {
+				logger.Warn("signer: connection closed unexpectedly", "did", did, "error", err)
+			} else {
+				logger.Info("signer: disconnected", "did", did)
+			}
+			return
+
+		// ── request context cancelled (server shutdown etc.) ──────────────
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// buildSignRequestMsg constructs the JSON bytes for a sign_request WebSocket
+// message. It is called by applyWrites (and the PLC signing path) before
+// handing the request off to SignerHub.RequestSignature.
+func buildSignRequestMsg(requestID string, did string, payloadB64 string, ops []PendingWriteOp, expiresAt time.Time) ([]byte, error) {
+	return json.Marshal(wsSignRequest{
+		Type:      "sign_request",
+		RequestID: requestID,
+		Did:       did,
+		Payload:   payloadB64,
+		Ops:       ops,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// isTokenExpired returns true if the JWT's exp claim is in the past.
+// It performs no signature verification — the token was already verified when
+// the WebSocket connection was established. This is purely a liveness check.
+func isTokenExpired(tokenStr string) bool {
+	// A JWT is three base64url segments separated by dots.
+	parts := strings.SplitN(tokenStr, ".", 3)
+	if len(parts) != 3 {
+		return true
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return true
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return true
+	}
+	return claims.Exp > 0 && time.Now().Unix() > claims.Exp
+}

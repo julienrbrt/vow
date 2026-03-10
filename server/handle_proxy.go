@@ -1,20 +1,13 @@
 package server
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 )
 
 func (s *Server) getAtprotoProxyEndpointFromRequest(r *http.Request) (string, string, error) {
@@ -82,28 +75,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	req.Header = r.Header.Clone()
 
 	if isAuthed {
-		// this is a little dumb. i should probably figure out a better way to do this, and use
-		// a single way of creating/signing jwts throughout the pds. kinda limited here because
-		// im using the atproto crypto lib for this though. will come back to it
-
-		header := map[string]string{
-			"alg": "ES256K",
-			"crv": "secp256k1",
-			"typ": "JWT",
-		}
-		hj, err := json.Marshal(header)
-		if err != nil {
-			logger.Error("error marshaling header", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		encheader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
-
-		// When proxying app.bsky.feed.getFeed the token is actually issued for the
-		// underlying feed generator and the app view passes it on. This allows the
-		// getFeed implementation to pass in the desired lxm and aud for the token
-		// and then just delegate to the general proxying logic
+		// When proxying app.bsky.feed.getFeed the token is issued for the
+		// underlying feed generator. The getFeed handler sets the desired lxm
+		// and aud on the context so they propagate here.
 		lxm, proxyTokenLxmExists := getContextValue[string](r, contextKeyProxyTokenLxm)
 		if !proxyTokenLxmExists || lxm == "" {
 			lxm = pts[2]
@@ -113,50 +87,24 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			aud = svcDid
 		}
 
-		payload := map[string]any{
-			"iss": repo.Repo.Did,
-			"aud": aud,
-			"lxm": lxm,
-			"jti": uuid.NewString(),
-			"exp": time.Now().Add(1 * time.Minute).UTC().Unix(),
-		}
-		pj, err := json.Marshal(payload)
+		// exp=0 tells signServiceAuthJWT to use the default lifetime and
+		// cache the resulting token so repeated proxy calls for the same
+		// (aud, lxm) pair reuse it instead of prompting the wallet each time.
+		token, err := s.signServiceAuthJWT(r.Context(), repo, aud, lxm, 0)
 		if err != nil {
-			logger.Error("error marshaling payload", "error", err)
-			helpers.ServerError(w, nil)
+			switch err {
+			case ErrSignerNotConnected:
+				helpers.InputError(w, new("SignerNotConnected"))
+			case ErrSignerRejected:
+				helpers.InputError(w, new("SignatureRejected"))
+			case ErrSignerTimeout:
+				helpers.InputError(w, new("SignerTimeout"))
+			default:
+				logger.Error("error signing proxy JWT", "error", err)
+				helpers.ServerError(w, nil)
+			}
 			return
 		}
-
-		encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
-
-		input := fmt.Sprintf("%s.%s", encheader, encpayload)
-		hash := sha256.Sum256([]byte(input))
-
-		sk, err := secp256k1secec.NewPrivateKey(repo.SigningKey)
-		if err != nil {
-			logger.Error("can't load private key", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		R, S, _, err := sk.SignRaw(rand.Reader, hash[:])
-		if err != nil {
-			logger.Error("error signing", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		rBytes := R.Bytes()
-		sBytes := S.Bytes()
-
-		rPadded := make([]byte, 32)
-		sPadded := make([]byte, 32)
-		copy(rPadded[32-len(rBytes):], rBytes)
-		copy(sPadded[32-len(sBytes):], sBytes)
-
-		rawsig := append(rPadded, sPadded...)
-		encsig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(rawsig), "=")
-		token := fmt.Sprintf("%s.%s", input, encsig)
 
 		req.Header.Set("authorization", "Bearer "+token)
 	} else {

@@ -42,14 +42,18 @@ func NewDbPersister(db *gorm.DB, retention time.Duration) (*DbPersister, error) 
 		Retention: retention,
 	}
 
-	// kind of hacky. we will try and get the latest one from the db, but if it doesn't exist...well we have a problem
-	// because the relay will already have _some_ value > 0 set as a cursor, we'll want to just set this to some high value
-	// we'll just grab a current unix timestamp and set that as the cursor
+	// Resume from the highest sequence number already persisted. If no events
+	// exist yet, start from a Unix timestamp so that a freshly-initialised PDS
+	// hands out cursors that are already greater than any relay's existing
+	// cursor for this host — relays use the cursor as a minimum-seq filter, so
+	// starting at 0 would cause them to request a full replay on reconnect.
 	var lastEvent models.EventRecord
 	if err := db.Order("seq desc").Limit(1).First(&lastEvent).Error; err != nil {
 		if err != gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("failed to get last event seq: %w", err)
 		}
+		// No events yet — seed with the current Unix timestamp so the first
+		// real sequence number is safely above any cursor a relay might hold.
 		p.Seq = time.Now().Unix()
 	} else {
 		p.Seq = lastEvent.Seq

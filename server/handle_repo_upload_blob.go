@@ -2,15 +2,15 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 
+	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
-	"github.com/ipfs/go-cid"
-	"github.com/multiformats/go-multihash"
 )
 
 const (
@@ -39,28 +39,9 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 		mime = "application/octet-stream"
 	}
 
-	ipfsUpload := s.ipfsConfig != nil && s.ipfsConfig.BlobstoreEnabled
-	storage := "sqlite"
-	if ipfsUpload {
-		storage = "ipfs"
-	}
-
-	blob := models.Blob{
-		Did:       urepo.Repo.Did,
-		RefCount:  0,
-		CreatedAt: s.repoman.clock.Next().String(),
-		Storage:   storage,
-	}
-
-	if err := s.db.Create(ctx, &blob, nil).Error; err != nil {
-		logger.Error("error creating new blob in db", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-
+	// Read the entire body into memory. Blobs go straight to IPFS; we don't
+	// write any raw bytes to SQLite.
 	read := 0
-	part := 0
-
 	buf := make([]byte, blockSize)
 	fulldata := new(bytes.Buffer)
 
@@ -76,60 +57,55 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		data := buf[:n]
+		fulldata.Write(buf[:n])
 		read += n
-		fulldata.Write(data)
-
-		if !ipfsUpload {
-			blobPart := models.BlobPart{
-				BlobID: blob.ID,
-				Idx:    part,
-				Data:   data,
-			}
-
-			if err := s.db.Create(ctx, &blobPart, nil).Error; err != nil {
-				logger.Error("error adding blob part to db", "error", err)
-				helpers.ServerError(w, nil)
-				return
-			}
-		}
-		part++
 
 		if n < blockSize {
 			break
 		}
 	}
 
-	c, err := cid.NewPrefixV1(cid.Raw, multihash.SHA2_256).Sum(fulldata.Bytes())
+	c, err := s.addBlobToIPFS(fulldata.Bytes(), mime)
 	if err != nil {
-		logger.Error("error creating cid prefix", "error", err)
+		logger.Error("error adding blob to ipfs", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
 
-	if ipfsUpload {
-		ipfsCid, err := s.addBlobToIPFS(fulldata.Bytes(), mime)
-		if err != nil {
-			logger.Error("error adding blob to ipfs", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		// Overwrite the locally computed CID with the one returned by the IPFS
-		// node so that retrieval via the gateway uses the correct address.
-		c = ipfsCid
-
-		if s.ipfsConfig.PinningServiceURL != "" {
-			if err := s.pinBlobToRemote(ctx, ipfsCid.String(), fmt.Sprintf("blob/%s/%s", urepo.Repo.Did, ipfsCid.String())); err != nil {
-				// Non-fatal: the blob is already on the local node; log and
-				// continue so the upload does not fail.
-				logger.Warn("error pinning blob to remote pinning service", "cid", ipfsCid.String(), "error", err)
-			}
+	// If the account has opted into x402 remote pinning and the signer
+	// is connected, kick off the payment+pin flow in the
+	// background. The blob is already safe on the local Kubo node so this
+	// is best-effort — a failure here does not affect the ATProto response.
+	if urepo.X402PinningEnabled && s.ipfsConfig.X402 != nil {
+		walletAddr := urepo.EthereumAddress()
+		if walletAddr == "" {
+			logger.Warn("x402 pinning enabled but no public key registered; skipping", "cid", c.String())
+		} else if !s.signerHub.IsConnected(urepo.Repo.Did) {
+			logger.Warn("x402 pinning enabled but signer not connected; skipping", "cid", c.String())
+		} else {
+			cidStr := c.String()
+			blobSize := read
+			go func() {
+				pinCtx, cancel := context.WithTimeout(context.Background(), 2*signerRequestTimeout)
+				defer cancel()
+				if err := s.pinBlobWithX402(pinCtx, urepo.Repo.Did, walletAddr, cidStr, blobSize); err != nil {
+					logger.Warn("x402 remote pin failed", "cid", cidStr, "error", err)
+				}
+			}()
 		}
 	}
 
-	if err := s.db.Exec(ctx, "UPDATE blobs SET cid = ? WHERE id = ?", nil, c.Bytes(), blob.ID).Error; err != nil {
-		logger.Error("error updating blob", "error", err)
+	// Persist a metadata row so we can list blobs by DID, resolve ownership,
+	// and track reference counts from records. No blob bytes are stored here.
+	blob := models.Blob{
+		Did:       urepo.Repo.Did,
+		RefCount:  0,
+		CreatedAt: s.repoman.clock.Next().String(),
+		Cid:       c.Bytes(),
+	}
+
+	if err := s.db.Create(ctx, &blob, nil).Error; err != nil {
+		logger.Error("error creating blob metadata in db", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
@@ -146,12 +122,7 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 // addBlobToIPFS adds raw blob data to the configured IPFS node via the Kubo
 // HTTP RPC API (/api/v0/add) and returns the resulting CID.
 func (s *Server) addBlobToIPFS(data []byte, mimeType string) (cid.Cid, error) {
-	nodeURL := s.ipfsConfig.NodeURL
-	if nodeURL == "" {
-		nodeURL = "http://127.0.0.1:5001"
-	}
-
-	endpoint := nodeURL + "/api/v0/add?cid-version=1&hash=sha2-256&pin=true&quieter=true"
+	endpoint := s.ipfsConfig.NodeURL + "/api/v0/add?cid-version=1&hash=sha2-256&pin=true&quieter=true"
 
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
@@ -186,8 +157,7 @@ func (s *Server) addBlobToIPFS(data []byte, mimeType string) (cid.Cid, error) {
 		return cid.Undef, fmt.Errorf("ipfs add returned status %d: %s", resp.StatusCode, string(msg))
 	}
 
-	// The Kubo API with ?quieter=true returns a single JSON line:
-	// {"Hash":"<cid>","Size":"<n>"}
+	// Kubo with ?quieter=true returns a single JSON line: {"Hash":"<cid>","Size":"<n>"}
 	var result struct {
 		Hash string `json:"Hash"`
 	}

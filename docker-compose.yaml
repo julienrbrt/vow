@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   init-keys:
     build:
@@ -21,6 +19,29 @@ services:
     entrypoint: ["/bin/sh", "/init-keys.sh"]
     restart: "no"
 
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: vow-ipfs
+    volumes:
+      - ipfs_data:/data/ipfs
+    environment:
+      # "server" profile disables mDNS/LAN discovery, appropriate for a
+      # server deployment.
+      IPFS_PROFILE: server
+    ports:
+      # Expose the IPFS gateway so a reverse proxy can serve blobs over HTTPS.
+      # Bound to 127.0.0.1 — not reachable from the public internet directly.
+      - "127.0.0.1:8081:8080"
+      # The RPC API (port 5001) is intentionally NOT exposed to the host.
+      # Only the vow container reaches it over the internal Docker network.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ipfs", "id"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
   vow:
     build:
       context: .
@@ -29,6 +50,8 @@ services:
     depends_on:
       init-keys:
         condition: service_completed_successfully
+      ipfs:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -36,7 +59,7 @@ services:
       - ./keys/rotation.key:/keys/rotation.key:ro
       - ./keys/jwk.key:/keys/jwk.key:ro
     environment:
-      # Required settings
+      # ── Required ────────────────────────────────────────────────────────
       VOW_DID: ${VOW_DID}
       VOW_HOSTNAME: ${VOW_HOSTNAME}
       VOW_ROTATION_KEY_PATH: /keys/rotation.key
@@ -46,12 +69,11 @@ services:
       VOW_ADMIN_PASSWORD: ${VOW_ADMIN_PASSWORD}
       VOW_SESSION_SECRET: ${VOW_SESSION_SECRET}
 
-      # Server configuration
+      # ── Server ──────────────────────────────────────────────────────────
       VOW_ADDR: ":8080"
       VOW_DB_NAME: ${VOW_DB_NAME:-/data/vow/vow.db}
-      VOW_BLOCKSTORE_VARIANT: ${VOW_BLOCKSTORE_VARIANT:-sqlite}
 
-      # Optional: SMTP settings for email
+      # ── SMTP (optional) ─────────────────────────────────────────────────
       VOW_SMTP_USER: ${VOW_SMTP_USER:-}
       VOW_SMTP_PASS: ${VOW_SMTP_PASS:-}
       VOW_SMTP_HOST: ${VOW_SMTP_HOST:-}
@@ -59,14 +81,22 @@ services:
       VOW_SMTP_EMAIL: ${VOW_SMTP_EMAIL:-}
       VOW_SMTP_NAME: ${VOW_SMTP_NAME:-}
 
-      # Optional: IPFS pinning configuration
-      VOW_IPFS_BLOBSTORE_ENABLED: ${VOW_IPFS_BLOBSTORE_ENABLED:-false}
-      VOW_IPFS_NODE_URL: ${VOW_IPFS_NODE_URL:-http://127.0.0.1:5001}
+      # ── IPFS ────────────────────────────────────────────────────────────
+      # RPC API resolves to the ipfs service over the internal Docker network.
+      VOW_IPFS_NODE_URL: ${VOW_IPFS_NODE_URL:-http://ipfs:5001}
+      # Public gateway URL for sync.getBlob redirects. Leave empty to have
+      # vow proxy blob content itself.
       VOW_IPFS_GATEWAY_URL: ${VOW_IPFS_GATEWAY_URL:-}
-      VOW_IPFS_PINNING_SERVICE_URL: ${VOW_IPFS_PINNING_SERVICE_URL:-}
-      VOW_IPFS_PINNING_SERVICE_TOKEN: ${VOW_IPFS_PINNING_SERVICE_TOKEN:-}
+      # Optional x402-gated remote pinning. When set, accounts with x402
+      # pinning enabled will have blobs additionally pinned here after local
+      # storage, with payment signed by the user's Ethereum wallet via the
+      # browser-based signer.
+      VOW_X402_PIN_URL: ${VOW_X402_PIN_URL:-}
+      # CAIP-2 chain identifier for the x402 pinning service.
+      # Defaults to Base Mainnet (eip155:8453).
+      VOW_X402_NETWORK: ${VOW_X402_NETWORK:-eip155:8453}
 
-      # Optional: Fallback proxy
+      # ── Misc (optional) ─────────────────────────────────────────────────
       VOW_FALLBACK_PROXY: ${VOW_FALLBACK_PROXY:-}
     restart: unless-stopped
     healthcheck:
@@ -102,5 +132,5 @@ services:
     restart: "no"
 
 volumes:
-  data:
+  ipfs_data:
     driver: local

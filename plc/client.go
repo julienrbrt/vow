@@ -69,7 +69,7 @@ func (c *Client) CreateDID(sigkey *atcrypto.PrivateKeyK256, recovery string, han
 		Prev:                nil,
 	}
 
-	if err := c.SignOp(sigkey, &op); err != nil {
+	if err := c.SignOp(&op); err != nil {
 		return "", nil, err
 	}
 
@@ -86,7 +86,17 @@ func (c *Client) CreateDidCredentials(sigkey *atcrypto.PrivateKeyK256, recovery 
 	if err != nil {
 		return nil, err
 	}
+	return c.createDidCredentialsFromPublicKey(pubsigkey, recovery, handle)
+}
 
+// CreateDidCredentialsFromPublicKey builds a DidCredentials struct from an
+// already-parsed public key. This is used on the BYOK path where the PDS only
+// holds the public key and must never touch a private key.
+func (c *Client) CreateDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey, recovery string, handle string) (*DidCredentials, error) {
+	return c.createDidCredentialsFromPublicKey(pubsigkey, recovery, handle)
+}
+
+func (c *Client) createDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey, recovery string, handle string) (*DidCredentials, error) {
 	pubrotkey, err := c.rotationKey.PublicKey()
 	if err != nil {
 		return nil, err
@@ -121,7 +131,21 @@ func (c *Client) CreateDidCredentials(sigkey *atcrypto.PrivateKeyK256, recovery 
 	return &creds, nil
 }
 
-func (c *Client) SignOp(sigkey *atcrypto.PrivateKeyK256, op *Operation) error {
+// RotationDIDKey returns the PDS rotation key as a did:key string. This is
+// used to check whether the PDS still has authority over a DID by comparing
+// against the rotationKeys list in the current PLC document.
+func (c *Client) RotationDIDKey() string {
+	pub, err := c.rotationKey.PublicKey()
+	if err != nil {
+		return ""
+	}
+	return pub.DIDKey()
+}
+
+// SignOp signs a PLC operation with the PDS rotation key. This is the only
+// key that can authorise changes to a did:plc document (until the rotation
+// key is transferred to the user via supplySigningKey).
+func (c *Client) SignOp(op *Operation) error {
 	b, err := op.MarshalCBOR()
 	if err != nil {
 		return err

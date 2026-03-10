@@ -1,17 +1,9 @@
 package models
 
 import (
-	"context"
 	"time"
 
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
-)
-
-type TwoFactorType string
-
-var (
-	TwoFactorTypeNone  = TwoFactorType("none")
-	TwoFactorTypeEmail = TwoFactorType("email")
+	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 type Repo struct {
@@ -30,28 +22,37 @@ type Repo struct {
 	AccountDeleteCode              *string
 	AccountDeleteCodeExpiresAt     *time.Time
 	Password                       string
-	SigningKey                     []byte
-	Rev                            string
-	Root                           []byte
-	Preferences                    []byte
-	Deactivated                    bool
-	TwoFactorCode                  *string
-	TwoFactorCodeExpiresAt         *time.Time
-	TwoFactorType                  TwoFactorType `gorm:"default:none"`
+	// PublicKey holds the compressed secp256k1 public key bytes for the
+	// account. This is the only key material the PDS retains.
+	PublicKey   []byte
+	Rev         string
+	Root        []byte
+	Preferences []byte
+	Deactivated bool
+	// X402PinningEnabled controls whether blobs and repo blocks are
+	// additionally pinned to a remote x402-gated pinning service after being
+	// written to the local Kubo node. When false (the default) content lives
+	// only on the co-located node.
+	X402PinningEnabled bool `gorm:"default:false"`
 }
 
-func (r *Repo) SignFor(ctx context.Context, did string, msg []byte) ([]byte, error) {
-	k, err := atcrypto.ParsePrivateBytesK256(r.SigningKey)
-	if err != nil {
-		return nil, err
+// EthereumAddress derives the EIP-55 checksummed Ethereum address from the
+// stored compressed secp256k1 public key. Returns an empty string if no
+// public key has been registered yet.
+//
+// The derivation is: decompress pubkey → keccak256(pubkey[1:]) → take last 20 bytes.
+// This is the same address the user's Ethereum wallet (Rabby, MetaMask, etc.)
+// will present, so it can be passed as the "from" field in EIP-3009 payment
+// authorisations without any separate storage.
+func (r *Repo) EthereumAddress() string {
+	if len(r.PublicKey) == 0 {
+		return ""
 	}
-
-	sig, err := k.HashAndSign(msg)
+	ecPub, err := gethcrypto.DecompressPubkey(r.PublicKey)
 	if err != nil {
-		return nil, err
+		return ""
 	}
-
-	return sig, nil
+	return gethcrypto.PubkeyToAddress(*ecPub).Hex()
 }
 
 func (r *Repo) Status() *string {
@@ -91,6 +92,28 @@ type InviteCodeUse struct {
 	UsedAt time.Time
 }
 
+// PendingWrite represents a write (or PLC operation) that has been prepared by
+// the PDS and is waiting for the user's client to sign it. Once the signature
+// is submitted via handleSubmitSignature the stored CommitData is used to
+// finalise the commit without the PDS ever having held the private key.
+type PendingWrite struct {
+	ID          string `gorm:"primaryKey"`
+	Did         string `gorm:"index"`
+	PayloadHash string
+	// Payload is the canonical bytes that the client must sign.
+	Payload []byte
+	// Data holds the original serialised write request so it can be replayed
+	// after signature verification.
+	Data []byte
+	// CommitData holds a JSON-serialised pendingCommitState that contains
+	// everything needed to finalise the commit once the signature arrives:
+	// the unsigned commit CBOR, MST diff blocks, record entries, firehose ops,
+	// and per-op results. It is nil for PLC-operation pending writes.
+	CommitData []byte
+	CreatedAt  time.Time
+	ExpiresAt  time.Time `gorm:"index"`
+}
+
 type Token struct {
 	Token        string `gorm:"primaryKey"`
 	Did          string `gorm:"index"`
@@ -115,27 +138,15 @@ type Record struct {
 	Value     []byte
 }
 
-type Block struct {
-	Did   string `gorm:"primaryKey;index:idx_blocks_by_rev"`
-	Cid   []byte `gorm:"primaryKey"`
-	Rev   string `gorm:"index:idx_blocks_by_rev,sort:desc"`
-	Value []byte
-}
-
+// Blob is a metadata index entry for a user-uploaded blob. The actual blob
+// data lives on IPFS; this row exists so we can list blobs by DID, track
+// reference counts from records, and know which user owns each CID.
 type Blob struct {
 	ID        uint
 	CreatedAt string `gorm:"index"`
 	Did       string `gorm:"index;index:idx_blob_did_cid"`
 	Cid       []byte `gorm:"index;index:idx_blob_did_cid"`
 	RefCount  int
-	Storage   string `gorm:"default:sqlite"`
-}
-
-type BlobPart struct {
-	Blob   Blob
-	BlobID uint `gorm:"primaryKey"`
-	Idx    int  `gorm:"primaryKey"`
-	Data   []byte
 }
 
 type ReservedKey struct {

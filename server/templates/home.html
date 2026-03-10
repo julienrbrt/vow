@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light dark" />
+        <link rel="stylesheet" href="/static/pico.css" />
+        <link rel="stylesheet" href="/static/style.css" />
+        <title>{{ .Hostname }} — AT Protocol PDS</title>
+        <style>
+            .home-container {
+                max-width: 82ch;
+                margin: 3em auto;
+            }
+
+            .tagline {
+                color: var(--pico-muted-color);
+                margin-bottom: 2em;
+                font-size: 0.95rem;
+            }
+            .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(14ch, 1fr));
+                gap: 1em;
+                margin-bottom: 2em;
+            }
+            .stat-card {
+                border: 1px solid var(--zinc-700);
+                border-radius: 10px;
+                padding: 1.2em 1em;
+                text-align: center;
+            }
+            .stat-card .stat-value {
+                font-size: 2rem;
+                font-weight: bold;
+                color: var(--pico-primary);
+                display: block;
+                line-height: 1.1;
+            }
+            .stat-card .stat-label {
+                font-size: 0.78rem;
+                color: var(--pico-muted-color);
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                margin-top: 0.35em;
+                display: block;
+            }
+            .info-section {
+                border: 1px solid var(--zinc-700);
+                border-radius: 10px;
+                padding: 1.4em 1.6em;
+                margin-bottom: 1em;
+            }
+            .info-section h3 {
+                margin-top: 0;
+                margin-bottom: 0.8em;
+                font-size: 0.78rem;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--pico-muted-color);
+            }
+            .info-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                padding: 0.35em 0;
+                border-bottom: 1px solid
+                    color-mix(in srgb, var(--zinc-700) 40%, transparent);
+                gap: 1em;
+            }
+            .info-row:last-child {
+                border-bottom: none;
+                padding-bottom: 0;
+            }
+            .info-row .info-key {
+                color: var(--pico-muted-color);
+                font-size: 0.88rem;
+                flex-shrink: 0;
+            }
+            .info-row .info-val {
+                font-family: monospace;
+                font-size: 0.88rem;
+                word-break: break-all;
+                text-align: right;
+            }
+            .badge {
+                display: inline-block;
+                padding: 0.15em 0.65em;
+                border-radius: 999px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                font-family: sans-serif;
+            }
+            .badge-yes {
+                background: color-mix(in srgb, var(--success) 18%, transparent);
+                color: var(--success);
+                border: 1px solid var(--success);
+            }
+            .badge-no {
+                background: color-mix(
+                    in srgb,
+                    var(--zinc-700) 25%,
+                    transparent
+                );
+                color: var(--pico-muted-color);
+                border: 1px solid var(--zinc-700);
+            }
+            footer {
+                text-align: center;
+                font-size: 0.8rem;
+                color: var(--pico-muted-color);
+                margin-top: 2em;
+                padding-bottom: 2.5em;
+            }
+            footer a {
+                color: var(--pico-muted-color);
+            }
+        </style>
+    </head>
+    <body>
+        <main class="home-container container">
+            <h1>VOW</h1>
+            <p class="tagline">
+                This is an AT Protocol Personal Data Server (aka, an atproto
+                PDS)
+            </p>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-value">{{ .Stats.TotalAccounts }}</span>
+                    <span class="stat-label">Accounts</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value">{{ .Stats.ActiveAccounts }}</span>
+                    <span class="stat-label">Active</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value">{{ .Stats.TotalRecords }}</span>
+                    <span class="stat-label">Records</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value">{{ .Stats.TotalBlobs }}</span>
+                    <span class="stat-label">Blobs</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value"
+                        >{{ .Stats.TotalInviteCodes }}</span
+                    >
+                    <span class="stat-label">Invite Codes</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3>Server Info</h3>
+                <div class="info-row">
+                    <span class="info-key">DID</span>
+                    <span class="info-val">{{ .Did }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-key">Hostname</span>
+                    <span class="info-val">{{ .Hostname }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-key">Contact</span>
+                    <span class="info-val">{{ .ContactEmail }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-key">Version</span>
+                    <span class="info-val">{{ .Version }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-key">Invite Required</span>
+                    <span class="info-val">
+                        {{- if .RequireInvite -}}
+                        <span class="badge badge-yes">Yes</span>
+                        {{- else -}}
+                        <span class="badge badge-no">No</span>
+                        {{- end -}}
+                    </span>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <a href="/?raw=1">Classic</a>
+            &nbsp;&middot;&nbsp;
+            <a href="https://pkg.rbrt.fr/vow">Code</a>
+        </footer>
+    </body>
+</html>

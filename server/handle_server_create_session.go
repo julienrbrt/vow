@@ -1,13 +1,10 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"golang.org/x/crypto/bcrypt"
@@ -17,21 +14,19 @@ import (
 )
 
 type ComAtprotoServerCreateSessionRequest struct {
-	Identifier      string  `json:"identifier" validate:"required"`
-	Password        string  `json:"password" validate:"required"`
-	AuthFactorToken *string `json:"authFactorToken,omitempty"`
+	Identifier string `json:"identifier" validate:"required"`
+	Password   string `json:"password" validate:"required"`
 }
 
 type ComAtprotoServerCreateSessionResponse struct {
-	AccessJwt       string  `json:"accessJwt"`
-	RefreshJwt      string  `json:"refreshJwt"`
-	Handle          string  `json:"handle"`
-	Did             string  `json:"did"`
-	Email           string  `json:"email"`
-	EmailConfirmed  bool    `json:"emailConfirmed"`
-	EmailAuthFactor bool    `json:"emailAuthFactor"`
-	Active          bool    `json:"active"`
-	Status          *string `json:"status,omitempty"`
+	AccessJwt      string  `json:"accessJwt"`
+	RefreshJwt     string  `json:"refreshJwt"`
+	Handle         string  `json:"handle"`
+	Did            string  `json:"did"`
+	Email          string  `json:"email"`
+	EmailConfirmed bool    `json:"emailConfirmed"`
+	Active         bool    `json:"active"`
+	Status         *string `json:"status,omitempty"`
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -100,44 +95,6 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// if repo requires 2FA token and one hasn't been provided, return error prompting for one
-	if repo.TwoFactorType != models.TwoFactorTypeNone && (req.AuthFactorToken == nil || *req.AuthFactorToken == "") {
-		err = s.createAndSendTwoFactorCode(ctx, repo)
-		if err != nil {
-			logger.Error("sending 2FA code", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		helpers.InputError(w, new("AuthFactorTokenRequired"))
-		return
-	}
-
-	// if 2FA is required, now check that the one provided is valid
-	if repo.TwoFactorType != models.TwoFactorTypeNone {
-		if repo.TwoFactorCode == nil || repo.TwoFactorCodeExpiresAt == nil {
-			err = s.createAndSendTwoFactorCode(ctx, repo)
-			if err != nil {
-				logger.Error("sending 2FA code", "error", err)
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			helpers.InputError(w, new("AuthFactorTokenRequired"))
-			return
-		}
-
-		if *repo.TwoFactorCode != *req.AuthFactorToken {
-			helpers.InvalidTokenError(w)
-			return
-		}
-
-		if time.Now().UTC().After(*repo.TwoFactorCodeExpiresAt) {
-			helpers.ExpiredTokenError(w)
-			return
-		}
-	}
-
 	sess, err := s.createSession(ctx, &repo.Repo)
 	if err != nil {
 		logger.Error("error creating session", "error", err)
@@ -146,32 +103,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, 200, ComAtprotoServerCreateSessionResponse{
-		AccessJwt:       sess.AccessToken,
-		RefreshJwt:      sess.RefreshToken,
-		Handle:          repo.Handle,
-		Did:             repo.Repo.Did,
-		Email:           repo.Email,
-		EmailConfirmed:  repo.EmailConfirmedAt != nil,
-		EmailAuthFactor: repo.TwoFactorType != models.TwoFactorTypeNone,
-		Active:          repo.Active(),
-		Status:          repo.Status(),
+		AccessJwt:      sess.AccessToken,
+		RefreshJwt:     sess.RefreshToken,
+		Handle:         repo.Handle,
+		Did:            repo.Repo.Did,
+		Email:          repo.Email,
+		EmailConfirmed: repo.EmailConfirmedAt != nil,
+		Active:         repo.Active(),
+		Status:         repo.Status(),
 	})
-}
-
-func (s *Server) createAndSendTwoFactorCode(ctx context.Context, repo models.RepoActor) error {
-	// TODO: when implementing a new type of 2FA there should be some logic in here to send the
-	// right type of code
-
-	code := fmt.Sprintf("%s-%s", helpers.RandomVarchar(5), helpers.RandomVarchar(5))
-	eat := time.Now().Add(10 * time.Minute).UTC()
-
-	if err := s.db.Exec(ctx, "UPDATE repos SET two_factor_code = ?, two_factor_code_expires_at = ? WHERE did = ?", nil, code, eat, repo.Repo.Did).Error; err != nil {
-		return fmt.Errorf("updating repo: %w", err)
-	}
-
-	if err := s.sendTwoFactorCode(repo.Email, repo.Handle, code); err != nil {
-		return fmt.Errorf("sending email: %w", err)
-	}
-
-	return nil
 }

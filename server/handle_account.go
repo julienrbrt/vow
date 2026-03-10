@@ -66,9 +66,11 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.renderTemplate(w, "account.html", map[string]any{
-		"Repo":    repo,
-		"Tokens":  tokenInfo,
-		"flashes": s.getFlashesFromSession(w, r, sess),
+		"Handle":          repo.Handle,
+		"HasSigningKey":   len(repo.PublicKey) > 0,
+		"EthereumAddress": repo.EthereumAddress(),
+		"Tokens":          tokenInfo,
+		"flashes":         s.getFlashesFromSession(w, r, sess),
 	}); err != nil {
 		logger.Error("failed to render template", "error", err)
 	}

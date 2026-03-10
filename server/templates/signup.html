@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light dark" />
+        <link rel="stylesheet" href="/static/pico.css" />
+        <link rel="stylesheet" href="/static/style.css" />
+        <title>Create Account</title>
+    </head>
+    <body class="centered-body">
+        <main
+            class="container base-container box-shadow-container login-container"
+        >
+            <h2>Create your account</h2>
+            <p>
+                Choose a handle and password to get started on
+                <b>{{ .Hostname }}</b>.
+            </p>
+            {{ if .flashes.errors }}
+            <div class="alert alert-danger margin-bottom-xs">
+                <p>{{ index .flashes.errors 0 }}</p>
+            </div>
+            {{ end }} {{ if .flashes.successes }}
+            <div class="alert alert-success margin-bottom-xs">
+                <p>{{ index .flashes.successes 0 }}</p>
+            </div>
+            {{ end }}
+            <form action="/account/signup" method="post">
+                <label for="handle">
+                    Handle
+                    <small style="opacity: 0.6"
+                        >(your username{{ .HandleSuffix }})</small
+                    >
+                </label>
+                <input
+                    name="handle"
+                    id="handle"
+                    placeholder="alice"
+                    value="{{ .FormHandle }}"
+                    required
+                />
+
+                <label for="email">Email</label>
+                <input
+                    name="email"
+                    id="email"
+                    type="email"
+                    placeholder="alice@example.com"
+                    value="{{ .FormEmail }}"
+                    required
+                />
+
+                <label for="password">Password</label>
+                <input
+                    name="password"
+                    id="password"
+                    type="password"
+                    placeholder="Password"
+                    required
+                />
+
+                {{ if .RequireInvite }}
+                <label for="invite_code">Invite Code</label>
+                <input
+                    name="invite_code"
+                    id="invite_code"
+                    placeholder="abc123-def456"
+                    value="{{ .FormInviteCode }}"
+                    required
+                />
+                {{ end }}
+
+                <input
+                    name="query_params"
+                    type="hidden"
+                    value="{{ .QueryParams }}"
+                />
+
+                <button class="primary" type="submit">Create Account</button>
+            </form>
+            <p style="margin-top: 1em; text-align: center">
+                Already have an account?
+                <a href="/account/signin{{ if .QueryParams }}?{{ .QueryParams }}{{ end }}"
+                    >Sign in</a
+                >
+            </p>
+        </main>
+    </body>
+</html>

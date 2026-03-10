@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/bluesky-social/indigo/carstore"
 	"github.com/bluesky-social/indigo/events"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
+	"github.com/google/uuid"
 	blockstore "github.com/ipfs/boxo/blockstore"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
@@ -26,7 +28,6 @@ import (
 	"github.com/ipld/go-car"
 	"github.com/multiformats/go-multihash"
 	"gorm.io/gorm/clause"
-	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/db"
 	"pkg.rbrt.fr/vow/metrics"
 	"pkg.rbrt.fr/vow/models"
@@ -58,7 +59,7 @@ func NewRepoMan(s *Server) *RepoMan {
 	}
 }
 
-func (rm *RepoMan) withRepo(ctx context.Context, did string, rootCid cid.Cid, fn func(r *atp.Repo) (newRoot cid.Cid, err error)) error {
+func (rm *RepoMan) withRepo(ctx context.Context, did string, rootCid cid.Cid, bs blockstore.Blockstore, fn func(r *atp.Repo) (newRoot cid.Cid, err error)) error {
 	rm.cacheMu.Lock()
 	cr, ok := rm.cache[did]
 	if !ok {
@@ -71,7 +72,6 @@ func (rm *RepoMan) withRepo(ctx context.Context, did string, rootCid cid.Cid, fn
 	defer cr.mu.Unlock()
 
 	if cr.repo == nil || cr.root != rootCid {
-		bs := vowblockstore.New(did, rm.s.db)
 		r, err := openRepo(ctx, bs, rootCid, did)
 		if err != nil {
 			return err
@@ -175,50 +175,108 @@ type revSetter interface {
 	SetRev(rev string)
 }
 
-func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
+// unsignedCommit is the intermediate product of buildUnsignedCommit. It holds
+// the serialised commit CBOR (without a sig field) plus the rev string, ready
+// for the user to sign. Once the signature arrives, finaliseCommit uses this
+// to produce the final commit block.
+type unsignedCommit struct {
+	// cbor is the canonical CBOR encoding of the commit struct with Sig == "".
+	// This is the byte slice the user must sign.
+	cbor []byte
+	rev  string
+}
+
+// buildUnsignedCommit advances the repo's MST, serialises the commit struct
+// with an empty signature, stamps the rev on the blockstore, and writes the
+// MST diff blocks — but does NOT write the commit block itself and does NOT
+// require a signing key. The caller must obtain a signature over uc.cbor and
+// then call finaliseCommit.
+func buildUnsignedCommit(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo) (*unsignedCommit, error) {
 	commit, err := r.Commit()
 	if err != nil {
-		return cid.Undef, "", fmt.Errorf("creating commit: %w", err)
+		return nil, fmt.Errorf("creating commit: %w", err)
+	}
+
+	// Stamp the revision on the blockstore before writing any MST blocks so
+	// that every block carries the correct Rev.
+	if rs, ok := bs.(revSetter); ok {
+		rs.SetRev(commit.Rev)
+	}
+
+	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
+		return nil, fmt.Errorf("writing MST blocks: %w", err)
+	}
+
+	buf := new(bytes.Buffer)
+	if err := commit.MarshalCBOR(buf); err != nil {
+		return nil, fmt.Errorf("marshaling commit: %w", err)
+	}
+
+	return &unsignedCommit{cbor: buf.Bytes(), rev: commit.Rev}, nil
+}
+
+// finaliseCommit takes a previously built unsignedCommit, attaches the
+// provided raw signature bytes, reserialises the commit, writes the commit
+// block to the blockstore, and returns the commit CID.
+//
+// sig must be the raw secp256k1 signature (compact or DER) over uc.cbor as
+// produced by an Ethereum wallet's personal_sign / eth_sign call.
+func finaliseCommit(ctx context.Context, bs blockstore.Blockstore, uc *unsignedCommit, sig []byte) (cid.Cid, error) {
+	// Decode the unsigned commit so we can attach the signature field.
+	var commit atp.Commit
+	if err := commit.UnmarshalCBOR(bytes.NewReader(uc.cbor)); err != nil {
+		return cid.Undef, fmt.Errorf("unmarshaling unsigned commit: %w", err)
+	}
+
+	commit.Sig = sig
+
+	buf := new(bytes.Buffer)
+	if err := commit.MarshalCBOR(buf); err != nil {
+		return cid.Undef, fmt.Errorf("marshaling signed commit: %w", err)
+	}
+
+	pref := cid.NewPrefixV1(cid.DagCBOR, multihash.SHA2_256)
+	commitCid, err := pref.Sum(buf.Bytes())
+	if err != nil {
+		return cid.Undef, fmt.Errorf("computing commit CID: %w", err)
+	}
+
+	blk, err := blocks.NewBlockWithCid(buf.Bytes(), commitCid)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("creating commit block: %w", err)
+	}
+	if err := bs.Put(ctx, blk); err != nil {
+		return cid.Undef, fmt.Errorf("writing commit block: %w", err)
+	}
+
+	return commitCid, nil
+}
+
+// commitRepo is kept for the initial-account-creation path where we need to
+// produce a genesis commit signed by the rotation key (before any BYOK key is
+// registered). It must NOT be used for any user-initiated write.
+func commitRepo(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo, signingKey []byte) (cid.Cid, string, error) {
+	uc, err := buildUnsignedCommit(ctx, bs, r)
+	if err != nil {
+		return cid.Undef, "", err
 	}
 
 	privkey, err := atcrypto.ParsePrivateBytesK256(signingKey)
 	if err != nil {
 		return cid.Undef, "", fmt.Errorf("parsing signing key: %w", err)
 	}
-	if err := commit.Sign(privkey); err != nil {
+
+	sig, err := privkey.HashAndSign(uc.cbor)
+	if err != nil {
 		return cid.Undef, "", fmt.Errorf("signing commit: %w", err)
 	}
 
-	// Stamp the revision on the blockstore before writing any blocks so that
-	// every block persisted for this commit carries the correct Rev value.
-	if rs, ok := bs.(revSetter); ok {
-		rs.SetRev(commit.Rev)
-	}
-
-	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
-		return cid.Undef, "", fmt.Errorf("writing MST blocks: %w", err)
-	}
-
-	buf := new(bytes.Buffer)
-	if err := commit.MarshalCBOR(buf); err != nil {
-		return cid.Undef, "", fmt.Errorf("marshaling commit: %w", err)
-	}
-
-	pref := cid.NewPrefixV1(cid.DagCBOR, multihash.SHA2_256)
-	commitCid, err := pref.Sum(buf.Bytes())
+	commitCid, err := finaliseCommit(ctx, bs, uc, sig)
 	if err != nil {
-		return cid.Undef, "", fmt.Errorf("computing commit CID: %w", err)
+		return cid.Undef, "", err
 	}
 
-	blk, err := blocks.NewBlockWithCid(buf.Bytes(), commitCid)
-	if err != nil {
-		return cid.Undef, "", fmt.Errorf("creating commit block: %w", err)
-	}
-	if err := bs.Put(ctx, blk); err != nil {
-		return cid.Undef, "", fmt.Errorf("writing commit block: %w", err)
-	}
-
-	return commitCid, commit.Rev, nil
+	return commitCid, uc.rev, nil
 }
 
 func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *MarshalableMap) (cid.Cid, error) {
@@ -245,43 +303,88 @@ func putRecordBlock(ctx context.Context, bs blockstore.Blockstore, rec *Marshala
 }
 
 // TODO make use of swap commit
+// pendingCommitState captures everything produced by the MST-building phase of
+// applyWrites that is needed to finalise the commit once a signature arrives.
+// It is JSON-serialised into models.PendingWrite.CommitData so that
+// finaliseWriteFromSignature can reconstruct it without re-running the MST
+// logic.
+//
+// NOTE: block data is stored as raw bytes slices (base64 in JSON) because CIDs
+// and block objects are not JSON-serialisable out of the box with the standard
+// library. We store them as parallel slices keyed by index.
+type pendingCommitState struct {
+	Did          string          `json:"did"`
+	PrevRev      string          `json:"prevRev"`
+	PrevRoot     []byte          `json:"prevRoot"`
+	UnsignedCBOR []byte          `json:"unsignedCbor"`
+	Rev          string          `json:"rev"`
+	Entries      []models.Record `json:"entries"`
+	// ATPOps mirrors the atp.Operation slice but only the fields we need for
+	// the firehose (Path, Value CID bytes, Prev CID bytes, action string).
+	ATPOps  []serialisedOp     `json:"atpOps"`
+	Results []ApplyWriteResult `json:"results"`
+	// WriteLog holds the raw block data from RecordingBlockstore.GetWriteLog(),
+	// serialised as {cid, data} pairs so we can replay them into the blockstore.
+	WriteLog []serialisedBlock `json:"writeLog"`
+}
+
+type serialisedOp struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+	Value  []byte `json:"value,omitempty"` // CID bytes for create/update
+	Prev   []byte `json:"prev,omitempty"`  // CID bytes for delete
+}
+
+type serialisedBlock struct {
+	CID  []byte `json:"cid"`
+	Data []byte `json:"data"`
+}
+
+// applyWrites builds the MST diff for the given operations, requests a
+// signature from the user's signer over the unsigned commit bytes,
+// and — once the signature is received — finalises and persists the commit.
+//
+// The function blocks until the signature arrives (up to signerRequestTimeout)
+// or an error occurs. Standard ATProto clients see a normal (slightly slower)
+// response; the signing round-trip is invisible to them.
 func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []Op, swapCommit *string) ([]ApplyWriteResult, error) {
 	rootcid, err := cid.Cast(urepo.Root)
 	if err != nil {
 		return nil, err
 	}
 
-	dbs := vowblockstore.New(urepo.Did, rm.s.db)
-	bs := vowblockstore.NewRecording(dbs)
+	bs, baseBS := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+	// dbs is the unwrapped base blockstore used for direct reads when building
+	// the firehose CAR slice.
+	dbs := baseBS
 
 	var results []ApplyWriteResult
-	var ops []*atp.Operation
+	var atpOps []*atp.Operation
 	var entries []models.Record
-	var newroot cid.Cid
-	var rev string
+	var uc *unsignedCommit
 
-	if err := rm.withRepo(ctx, urepo.Did, rootcid, func(r *atp.Repo) (cid.Cid, error) {
+	// ── Phase 1: build MST diff and unsigned commit ───────────────────────
+	if err := rm.withRepo(ctx, urepo.Did, rootcid, bs, func(r *atp.Repo) (cid.Cid, error) {
 		entries = make([]models.Record, 0, len(writes))
 		for i, op := range writes {
 			// updates or deletes must supply an rkey
 			if op.Type != OpTypeCreate && op.Rkey == nil {
 				return cid.Undef, fmt.Errorf("invalid rkey")
 			} else if op.Type == OpTypeCreate && op.Rkey != nil {
-				// we should convert this op to an update if the rkey already exists
+				// convert to update if the rkey already exists
 				path := fmt.Sprintf("%s/%s", op.Collection, *op.Rkey)
 				existing, _ := r.MST.Get([]byte(path))
 				if existing != nil {
 					op.Type = OpTypeUpdate
 				}
 			} else if op.Rkey == nil {
-				// creates that don't supply an rkey will have one generated for them
+				// generates rkey for creates that don't supply one
 				op.Rkey = new(rm.clock.Next().String())
 				writes[i].Rkey = op.Rkey
 			}
 
 			path := fmt.Sprintf("%s/%s", op.Collection, *op.Rkey)
 
-			// validate the record key is actually valid
 			_, err := syntax.ParseRecordKey(*op.Rkey)
 			if err != nil {
 				return cid.Undef, err
@@ -289,7 +392,6 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 
 			switch op.Type {
 			case OpTypeCreate:
-				// HACK: this fixes some type conversions, mainly around integers
 				b, err := json.Marshal(*op.Record)
 				if err != nil {
 					return cid.Undef, err
@@ -300,7 +402,6 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				}
 				mm := MarshalableMap(out)
 
-				// HACK: if a record doesn't contain a $type, we can manually set it here based on the op's collection
 				if mm["$type"] == "" {
 					mm["$type"] = op.Collection
 				}
@@ -314,7 +415,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				if err != nil {
 					return cid.Undef, err
 				}
-				ops = append(ops, atpOp)
+				atpOps = append(atpOps, atpOp)
 
 				d, err := atdata.MarshalCBOR(mm)
 				if err != nil {
@@ -334,17 +435,15 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 					Type:             new(OpTypeCreate.String()),
 					Uri:              new("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
 					Cid:              new(nc.String()),
-					ValidationStatus: new("valid"), // TODO: obviously this might not be true atm lol
+					ValidationStatus: new("valid"),
 				})
+
 			case OpTypeDelete:
-				// try to find the old record in the database
 				var old models.Record
 				if err := rm.db.Raw(ctx, "SELECT value FROM records WHERE did = ? AND nsid = ? AND rkey = ?", nil, urepo.Did, op.Collection, op.Rkey).Scan(&old).Error; err != nil {
 					return cid.Undef, err
 				}
 
-				// A nil Cid on the entry is the sentinel used later in the
-				// batch-upsert loop to distinguish deletes from creates/updates.
 				entries = append(entries, models.Record{
 					Did:   urepo.Did,
 					Nsid:  op.Collection,
@@ -356,13 +455,13 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				if err != nil {
 					return cid.Undef, err
 				}
-				ops = append(ops, atpOp)
+				atpOps = append(atpOps, atpOp)
 
 				results = append(results, ApplyWriteResult{
 					Type: new(OpTypeDelete.String()),
 				})
+
 			case OpTypeUpdate:
-				// HACK: same hack as above for type fixes
 				b, err := json.Marshal(*op.Record)
 				if err != nil {
 					return cid.Undef, err
@@ -382,7 +481,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				if err != nil {
 					return cid.Undef, err
 				}
-				ops = append(ops, atpOp)
+				atpOps = append(atpOps, atpOp)
 
 				d, err := atdata.MarshalCBOR(mm)
 				if err != nil {
@@ -402,33 +501,162 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 					Type:             new(OpTypeUpdate.String()),
 					Uri:              new("at://" + urepo.Did + "/" + op.Collection + "/" + *op.Rkey),
 					Cid:              new(nc.String()),
-					ValidationStatus: new("valid"), // TODO: obviously this might not be true atm lol
+					ValidationStatus: new("valid"),
 				})
 			}
 		}
 
-		// commit and get the new root
+		// Build the unsigned commit (writes MST diff blocks to bs).
 		var commitErr error
-		newroot, rev, commitErr = commitRepo(ctx, bs, r, urepo.SigningKey)
+		uc, commitErr = buildUnsignedCommit(ctx, bs, r)
 		if commitErr != nil {
 			return cid.Undef, commitErr
 		}
 
-		return newroot, nil
+		// Return the previous root CID; withRepo updates its cache only after
+		// the final newroot is known (set after signature). We return Undef
+		// here to intentionally invalidate the cache so the next call reloads
+		// from the blockstore with the real signed root.
+		return cid.Undef, nil
 	}); err != nil {
 		return nil, err
 	}
 
+	// ── Phase 2: serialise the write log so we can replay it ─────────────
+	writeLog := bs.GetWriteLog()
+	sBlocks := make([]serialisedBlock, 0, len(writeLog))
+	for _, blk := range writeLog {
+		sBlocks = append(sBlocks, serialisedBlock{
+			CID:  blk.Cid().Bytes(),
+			Data: blk.RawData(),
+		})
+	}
+
+	sOps := make([]serialisedOp, 0, len(atpOps))
+	for _, op := range atpOps {
+		sop := serialisedOp{Path: op.Path}
+		switch {
+		case op.IsCreate():
+			sop.Action = "create"
+			sop.Value = (*op.Value).Bytes()
+		case op.IsUpdate():
+			sop.Action = "update"
+			sop.Value = (*op.Value).Bytes()
+		case op.IsDelete():
+			sop.Action = "delete"
+			sop.Prev = (*op.Prev).Bytes()
+		}
+		sOps = append(sOps, sop)
+	}
+
+	state := pendingCommitState{
+		Did:          urepo.Did,
+		PrevRev:      urepo.Rev,
+		PrevRoot:     urepo.Root,
+		UnsignedCBOR: uc.cbor,
+		Rev:          uc.rev,
+		Entries:      entries,
+		ATPOps:       sOps,
+		Results:      results,
+		WriteLog:     sBlocks,
+	}
+
+	// ── Phase 3: request signature from the signer ───────────────────────
+	requestID := uuid.NewString()
+	expiresAt := time.Now().Add(signerRequestTimeout)
+
+	// Build human-readable op summaries for the sign_request message.
+	pendingOps := make([]PendingWriteOp, 0, len(writes))
+	for _, w := range writes {
+		rkey := ""
+		if w.Rkey != nil {
+			rkey = *w.Rkey
+		}
+		pendingOps = append(pendingOps, PendingWriteOp{
+			Type:       string(w.Type),
+			Collection: w.Collection,
+			Rkey:       rkey,
+		})
+	}
+
+	payloadB64 := base64.RawURLEncoding.EncodeToString(uc.cbor)
+	msgBytes, err := buildSignRequestMsg(requestID, urepo.Did, payloadB64, pendingOps, expiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("building sign request message: %w", err)
+	}
+
+	// Use a child context with the signing deadline so RequestSignature
+	// returns promptly if the signer is slow.
+	signCtx, cancel := context.WithDeadline(ctx, expiresAt)
+	defer cancel()
+
+	sigBytes, err := rm.s.signerHub.RequestSignature(signCtx, urepo.Did, requestID, msgBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// ── Phase 4: verify the signature ─────────────────────────────────────
+	if len(urepo.PublicKey) == 0 {
+		return nil, fmt.Errorf("no public key registered for account %s", urepo.Did)
+	}
+
+	pubKey, err := atcrypto.ParsePublicBytesK256(urepo.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("parsing stored public key: %w", err)
+	}
+
+	if err := pubKey.HashAndVerifyLenient(uc.cbor, sigBytes); err != nil {
+		return nil, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	// ── Phase 5: finalise and persist the commit ───────────────────────────
+	return rm.finaliseWriteFromState(ctx, urepo, &state, sigBytes, dbs)
+}
+
+// finaliseWriteFromState takes a pendingCommitState and a verified signature,
+// finalises the commit block, persists records, fires the firehose event, and
+// updates the repo root. It is shared between the inline applyWrites path and
+// (in the future) any async retry path.
+func (rm *RepoMan) finaliseWriteFromState(
+	ctx context.Context,
+	urepo models.Repo,
+	state *pendingCommitState,
+	sigBytes []byte,
+	dbs blockstore.Blockstore,
+) ([]ApplyWriteResult, error) {
+	bs, _ := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+
+	// Replay the write log blocks into the fresh blockstore so finaliseCommit
+	// can locate them when building the CAR.
+	for _, sb := range state.WriteLog {
+		c, err := cid.Cast(sb.CID)
+		if err != nil {
+			return nil, fmt.Errorf("replaying write log, bad CID: %w", err)
+		}
+		blk, err := blocks.NewBlockWithCid(sb.Data, c)
+		if err != nil {
+			return nil, fmt.Errorf("replaying write log, bad block: %w", err)
+		}
+		if err := bs.Put(ctx, blk); err != nil {
+			return nil, fmt.Errorf("replaying write log, put failed: %w", err)
+		}
+	}
+
+	uc := &unsignedCommit{cbor: state.UnsignedCBOR, rev: state.Rev}
+	newroot, err := finaliseCommit(ctx, bs, uc, sigBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	results := state.Results
 	for _, result := range results {
 		if result.Type != nil {
 			metrics.RepoOperations.WithLabelValues(*result.Type).Inc()
 		}
 	}
 
-	// create a buffer for dumping our new cbor into
+	// Build the firehose CAR buffer.
 	buf := new(bytes.Buffer)
-
-	// first write the car header to the buffer
 	hb, err := cbor.DumpObject(&car.CarHeader{
 		Roots:   []cid.Cid{newroot},
 		Version: 1,
@@ -440,39 +668,40 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return nil, err
 	}
 
-	// create the repo ops for the firehose from the tracked operations
-	repoOps := make([]*atproto.SyncSubscribeRepos_RepoOp, 0, len(ops))
-	for _, op := range ops {
-		if op.IsCreate() || op.IsUpdate() {
-			kind := "create"
-			if op.IsUpdate() {
-				kind = "update"
+	repoOps := make([]*atproto.SyncSubscribeRepos_RepoOp, 0, len(state.ATPOps))
+	for _, sop := range state.ATPOps {
+		switch sop.Action {
+		case "create", "update":
+			c, err := cid.Cast(sop.Value)
+			if err != nil {
+				return nil, fmt.Errorf("bad value CID in serialised op: %w", err)
 			}
-
-			ll := lexutil.LexLink(*op.Value)
+			ll := lexutil.LexLink(c)
 			repoOps = append(repoOps, &atproto.SyncSubscribeRepos_RepoOp{
-				Action: kind,
-				Path:   op.Path,
+				Action: sop.Action,
+				Path:   sop.Path,
 				Cid:    &ll,
 			})
-
-			blk, err := dbs.Get(ctx, *op.Value)
+			blk, err := dbs.Get(ctx, c)
 			if err != nil {
 				return nil, err
 			}
 			if _, err := carstore.LdWrite(buf, blk.Cid().Bytes(), blk.RawData()); err != nil {
 				return nil, err
 			}
-		} else if op.IsDelete() {
-			ll := lexutil.LexLink(*op.Prev)
+		case "delete":
+			c, err := cid.Cast(sop.Prev)
+			if err != nil {
+				return nil, fmt.Errorf("bad prev CID in serialised op: %w", err)
+			}
+			ll := lexutil.LexLink(c)
 			repoOps = append(repoOps, &atproto.SyncSubscribeRepos_RepoOp{
 				Action: "delete",
-				Path:   op.Path,
+				Path:   sop.Path,
 				Cid:    nil,
 				Prev:   &ll,
 			})
-
-			blk, err := dbs.Get(ctx, *op.Prev)
+			blk, err := dbs.Get(ctx, c)
 			if err != nil {
 				return nil, err
 			}
@@ -482,18 +711,21 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		}
 	}
 
-	// write the writelog to the buffer
-	for _, blk := range bs.GetWriteLog() {
-		if _, err := carstore.LdWrite(buf, blk.Cid().Bytes(), blk.RawData()); err != nil {
+	// Write log blocks into CAR.
+	for _, sb := range state.WriteLog {
+		c, err := cid.Cast(sb.CID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := carstore.LdWrite(buf, c.Bytes(), sb.Data); err != nil {
 			return nil, err
 		}
 	}
 
-	// blob blob blob blob blob :3
+	// Persist records and handle blob ref-counting.
 	var blobs []lexutil.LexLink
-	for _, entry := range entries {
+	for _, entry := range state.Entries {
 		var cids []cid.Cid
-		// whenever there is cid present, we know it's a create (dumb)
 		if entry.Cid != "" {
 			if err := rm.s.db.Create(ctx, &entry, []clause.Expression{clause.OnConflict{
 				Columns:   []clause.Column{{Name: "did"}, {Name: "nsid"}, {Name: "rkey"}},
@@ -501,41 +733,31 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 			}}).Error; err != nil {
 				return nil, err
 			}
-
-			// increment the given blob refs, yay
 			cids, err = rm.incrementBlobRefs(ctx, urepo, entry.Value)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			// as i noted above this is dumb. but we delete whenever the cid is nil. it works solely becaue the pkey
-			// is did + collection + rkey. i still really want to separate that out, or use a different type to make
-			// this less confusing/easy to read. alas, its 2 am and yea no
 			if err := rm.s.db.Delete(ctx, &entry, nil).Error; err != nil {
 				return nil, err
 			}
-
 			cids, err = rm.decrementBlobRefs(ctx, urepo, entry.Value)
 			if err != nil {
 				return nil, err
 			}
 		}
-
-		// add all the relevant blobs to the blobs list of blobs. blob ^.^
 		for _, c := range cids {
 			blobs = append(blobs, lexutil.LexLink(c))
 		}
 	}
 
-	// NOTE: using the request ctx seems a bit suss here, so using a background context. i'm not sure if this
-	// runs sync or not
 	if err := rm.s.evtman.AddEvent(context.Background(), &events.XRPCStreamEvent{
 		RepoCommit: &atproto.SyncSubscribeRepos_Commit{
 			Repo:   urepo.Did,
 			Blocks: buf.Bytes(),
 			Blobs:  blobs,
-			Rev:    rev,
-			Since:  &urepo.Rev,
+			Rev:    state.Rev,
+			Since:  &state.PrevRev,
 			Commit: lexutil.LexLink(newroot),
 			Time:   time.Now().Format(time.RFC3339Nano),
 			Ops:    repoOps,
@@ -545,7 +767,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		rm.s.logger.Error("failed to add event", "error", err)
 	}
 
-	if err := rm.s.UpdateRepo(ctx, urepo.Did, newroot, rev); err != nil {
+	if err := rm.s.UpdateRepo(ctx, urepo.Did, newroot, state.Rev); err != nil {
 		return nil, err
 	}
 
@@ -553,7 +775,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		results[i].Type = new(*results[i].Type + "Result")
 		results[i].Commit = &RepoCommit{
 			Cid: newroot.String(),
-			Rev: rev,
+			Rev: state.Rev,
 		}
 	}
 
@@ -566,12 +788,12 @@ func (rm *RepoMan) getRecordProof(ctx context.Context, urepo models.Repo, collec
 		return cid.Undef, nil, err
 	}
 
-	dbs := vowblockstore.New(urepo.Did, rm.s.db)
-
 	var proofBlocks []blocks.Block
 	var recordCid *cid.Cid
 
-	if err := rm.withRepo(ctx, urepo.Did, commitCid, func(r *atp.Repo) (cid.Cid, error) {
+	dbs := newBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+
+	if err := rm.withRepo(ctx, urepo.Did, commitCid, dbs, func(r *atp.Repo) (cid.Cid, error) {
 		path := collection + "/" + rkey
 
 		// walk the cached in-memory tree to find the record and collect MST node CIDs on the path
@@ -686,16 +908,19 @@ func (rm *RepoMan) decrementBlobRefs(ctx context.Context, urepo models.Repo, cbo
 			return nil, err
 		}
 
-		// TODO: blobs with storage == "ipfs" are not unpinned from the local
-		// IPFS node or the remote pinning service when their ref_count reaches
-		// zero. A future cleanup pass should call /api/v0/pin/rm on the local
-		// node and DELETE /pins/<requestid> on the remote pinning service.
 		if res.Count == 0 {
 			if err := rm.db.Exec(ctx, "DELETE FROM blobs WHERE id = ?", nil, res.ID).Error; err != nil {
 				return nil, err
 			}
 			if err := rm.db.Exec(ctx, "DELETE FROM blob_parts WHERE blob_id = ?", nil, res.ID).Error; err != nil {
 				return nil, err
+			}
+
+			// Unpin the blob from the local Kubo node so it can be
+			// garbage-collected. This is best-effort — a failure here does
+			// not affect the ATProto operation.
+			if rm.s.ipfsConfig != nil && rm.s.ipfsConfig.NodeURL != "" {
+				go rm.s.unpinFromIPFS(c.String())
 			}
 		}
 	}

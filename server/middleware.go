@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -10,9 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/golang-jwt/jwt/v4"
-	"gitlab.com/yawning/secp256k1-voi"
-	secp256k1secec "gitlab.com/yawning/secp256k1-voi/secec"
 	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -54,12 +52,54 @@ func (s *Server) handleAdminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// handleWebSessionMiddleware authenticates requests using the web session
+// cookie (set by handleAccountSigninPost). It is intended for browser-facing
+// routes on the account page where a Bearer token is not available.
+func (s *Server) handleWebSessionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		sess, err := s.sessions.Get(r, s.config.SessionCookieKey)
+		if err != nil {
+			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
+			return
+		}
+
+		did, ok := sess.Values["did"].(string)
+		if !ok || did == "" {
+			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
+			return
+		}
+
+		repo, err := s.getRepoActorByDid(ctx, did)
+		if err != nil {
+			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
+			return
+		}
+
+		r = setContextValue(r, contextKeyRepo, repo)
+		r = setContextValue(r, contextKeyDid, did)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := s.logger.With("name", "handleLegacySessionMiddleware")
 
 		authheader := r.Header.Get("authorization")
+
+		// WebSocket upgrades cannot send custom headers, so the access token
+		// is passed as the access_token query parameter instead. Synthesise a
+		// Bearer header from it so the rest of the middleware can proceed
+		// unchanged.
+		if authheader == "" {
+			if qt := r.URL.Query().Get("access_token"); qt != "" {
+				authheader = "Bearer " + qt
+			}
+		}
+
 		if authheader == "" {
 			s.writeJSON(w, 401, map[string]string{"error": "Unauthorized"})
 			return
@@ -135,7 +175,6 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 		} else {
 			kpts := strings.Split(tokenstr, ".")
 			signingInput := kpts[0] + "." + kpts[1]
-			hash := sha256.Sum256([]byte(signingInput))
 			sigBytes, err := base64.RawURLEncoding.DecodeString(kpts[2])
 			if err != nil {
 				logger.Error("error decoding signature bytes", "error", err)
@@ -148,11 +187,6 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 				helpers.ServerError(w, nil)
 				return
 			}
-
-			rBytes := sigBytes[:32]
-			sBytes := sigBytes[32:]
-			rr, _ := secp256k1.NewScalarFromBytes((*[32]byte)(rBytes))
-			ss, _ := secp256k1.NewScalarFromBytes((*[32]byte)(sBytes))
 
 			if repo == nil {
 				sub, ok := claims["sub"].(string)
@@ -171,23 +205,25 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 				did = sub
 			}
 
-			sk, err := secp256k1secec.NewPrivateKey(repo.SigningKey)
+			// The PDS never holds a private key. Verify the ES256K JWT
+			// signature using the compressed public key stored in PublicKey.
+			if len(repo.PublicKey) == 0 {
+				logger.Error("no public key registered for account", "did", repo.Repo.Did)
+				helpers.ServerError(w, nil)
+				return
+			}
+
+			pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
 			if err != nil {
-				logger.Error("can't load private key", "error", err)
+				logger.Error("can't parse stored public key", "error", err)
 				helpers.ServerError(w, nil)
 				return
 			}
 
-			pubKey, ok := sk.Public().(*secp256k1secec.PublicKey)
-			if !ok {
-				logger.Error("error getting public key from sk")
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			verified := pubKey.VerifyRaw(hash[:], rr, ss)
-			if !verified {
-				logger.Error("error verifying", "error", err)
+			// sigBytes is already the compact (r||s) 64-byte form. Verify
+			// using HashAndVerifyLenient which hashes signingInput internally.
+			if err := pubKey.HashAndVerifyLenient([]byte(signingInput), sigBytes); err != nil {
+				logger.Error("ES256K signature verification failed", "error", err)
 				helpers.ServerError(w, nil)
 				return
 			}

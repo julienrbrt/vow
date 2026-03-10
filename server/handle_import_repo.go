@@ -7,11 +7,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipld/go-car"
-	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -29,7 +29,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := vowblockstore.New(urepo.Repo.Did, s.db)
+	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsConfig)
 
 	cs, err := car.NewCarReader(bytes.NewReader(b))
 	if err != nil {
@@ -108,7 +108,18 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 
 	tx.Commit()
 
-	root, rev, err := commitRepo(ctx, bs, atRepo, urepo.SigningKey)
+	// The PDS never holds the user's private key. We generate an ephemeral key
+	// solely to produce a valid commit block for the imported repo. The user
+	// must call supplySigningKey via the account page after import so that
+	// subsequent writes can be signed correctly.
+	ephemeralKey, err := atcrypto.GeneratePrivateKeyK256()
+	if err != nil {
+		logger.Error("error generating ephemeral key for import commit", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+
+	root, rev, err := commitRepo(ctx, bs, atRepo, ephemeralKey.Bytes())
 	if err != nil {
 		logger.Error("error committing", "error", err)
 		helpers.ServerError(w, nil)

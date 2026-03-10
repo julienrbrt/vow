@@ -1,14 +1,12 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/models"
 )
 
 func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
@@ -40,63 +38,57 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := urepo.Status()
-	if status != nil {
+	if status := urepo.Status(); status != nil {
 		if *status == "deactivated" {
 			helpers.InputError(w, new("RepoDeactivated"))
 			return
 		}
 	}
 
-	var blob models.Blob
-	if err := s.db.Raw(ctx, "SELECT * FROM blobs WHERE did = ? AND cid = ?", nil, did, c.Bytes()).Scan(&blob).Error; err != nil {
+	// Verify this blob is registered to the given DID. We don't store the
+	// blob bytes here — just the metadata row that proves ownership.
+	var count int64
+	if err := s.db.Raw(ctx, "SELECT COUNT(*) FROM blobs WHERE did = ? AND cid = ?", nil, did, c.Bytes()).Scan(&count).Error; err != nil {
 		logger.Error("error looking up blob", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
+	if count == 0 {
+		helpers.InputError(w, new("BlobNotFound"))
+		return
+	}
 
-	buf := new(bytes.Buffer)
+	// If a public gateway is configured, redirect the client directly to it
+	// instead of proxying the content through this server.
+	if s.ipfsConfig.GatewayURL != "" {
+		redirectURL := fmt.Sprintf("%s/ipfs/%s", s.ipfsConfig.GatewayURL, c.String())
+		http.Redirect(w, r, redirectURL, http.StatusFound)
+		return
+	}
 
-	switch blob.Storage {
-	case "sqlite":
-		var parts []models.BlobPart
-		if err := s.db.Raw(ctx, "SELECT * FROM blob_parts WHERE blob_id = ? ORDER BY idx", nil, blob.ID).Scan(&parts).Error; err != nil {
-			logger.Error("error getting blob parts", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
+	// Otherwise fetch from the local Kubo node via /api/v0/cat and stream
+	// the content back to the client.
+	nodeURL := s.ipfsConfig.NodeURL
+	endpoint := fmt.Sprintf("%s/api/v0/cat?arg=%s", nodeURL, c.String())
 
-		for _, p := range parts {
-			buf.Write(p.Data)
-		}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		logger.Error("error building ipfs cat request", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
 
-	case "ipfs":
-		if s.ipfsConfig == nil || !s.ipfsConfig.BlobstoreEnabled {
-			logger.Error("ipfs storage disabled")
-			helpers.ServerError(w, nil)
-			return
-		}
+	resp, err := s.http.Do(req)
+	if err != nil {
+		logger.Error("error calling ipfs cat", "cid", c.String(), "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-		// If a public gateway is configured, redirect the client directly to it
-		// instead of proxying the content through this server.
-		if s.ipfsConfig.GatewayURL != "" {
-			redirectURL := fmt.Sprintf("%s/ipfs/%s", s.ipfsConfig.GatewayURL, c.String())
-			http.Redirect(w, r, redirectURL, http.StatusFound)
-			return
-		}
-
-		// Otherwise fetch from the local Kubo node via /api/v0/cat and stream
-		// the content back to the client.
-		data, err := s.fetchBlobFromIPFS(c.String())
-		if err != nil {
-			logger.Error("error fetching blob from ipfs node", "cid", c.String(), "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-		buf.Write(data)
-
-	default:
-		logger.Error("unknown storage", "storage", blob.Storage)
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		logger.Error("ipfs cat returned error", "cid", c.String(), "status", resp.StatusCode, "body", string(msg))
 		helpers.ServerError(w, nil)
 		return
 	}
@@ -104,41 +96,7 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename="+c.String())
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, buf); err != nil {
-		logger.Error("failed to write blob response", "error", err)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		logger.Error("failed to stream blob response", "error", err)
 	}
-}
-
-// fetchBlobFromIPFS retrieves blob data for the given CID from the local Kubo
-// node using the HTTP RPC API (/api/v0/cat).
-func (s *Server) fetchBlobFromIPFS(cidStr string) ([]byte, error) {
-	nodeURL := s.ipfsConfig.NodeURL
-	if nodeURL == "" {
-		nodeURL = "http://127.0.0.1:5001"
-	}
-
-	endpoint := fmt.Sprintf("%s/api/v0/cat?arg=%s", nodeURL, cidStr)
-
-	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error building ipfs cat request: %w", err)
-	}
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error calling ipfs cat: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ipfs cat returned status %d: %s", resp.StatusCode, string(msg))
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading ipfs cat response: %w", err)
-	}
-
-	return data, nil
 }

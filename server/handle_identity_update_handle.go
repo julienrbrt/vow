@@ -2,15 +2,17 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
+	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -71,19 +73,79 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 			Prev:                &latest.Cid,
 		}
 
-		k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
-		if err != nil {
-			logger.Error("error parsing signing key", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
+		// Determine whether the PDS rotation key still has authority over
+		// this DID. After supplySigningKey transfers the rotation key to the
+		// user's wallet, the PDS key is no longer in the rotation key list
+		// and cannot sign PLC operations.
+		pdsRotationDIDKey := s.plcClient.RotationDIDKey()
+		pdsCanSign := slices.Contains(latest.Operation.RotationKeys, pdsRotationDIDKey)
 
-		if err := s.plcClient.SignOp(k, &op); err != nil {
-			helpers.ServerError(w, nil)
-			return
+		if pdsCanSign {
+			// PDS still holds authority — sign directly.
+			if err := s.plcClient.SignOp(&op); err != nil {
+				logger.Error("error signing PLC operation with rotation key", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+		} else {
+			// Rotation key belongs to the user's wallet. Delegate the
+			// signing to the signer over WebSocket, same as
+			// handleSignPlcOperation does for other PLC operations.
+			if !s.signerHub.IsConnected(repo.Repo.Did) {
+				helpers.InputError(w, new("SignerNotConnected"))
+				return
+			}
+
+			opCBOR, err := op.MarshalCBOR()
+			if err != nil {
+				logger.Error("error marshalling PLC op to CBOR", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+
+			requestID := uuid.NewString()
+			expiresAt := time.Now().Add(signerRequestTimeout)
+
+			pendingOps := []PendingWriteOp{
+				{
+					Type:       "plc_operation",
+					Collection: "identity",
+					Rkey:       req.Handle,
+				},
+			}
+
+			payloadB64 := base64.RawURLEncoding.EncodeToString(opCBOR)
+			msgBytes, err := buildSignRequestMsg(requestID, repo.Repo.Did, payloadB64, pendingOps, expiresAt)
+			if err != nil {
+				logger.Error("error building sign request message", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+
+			signCtx, cancel := context.WithDeadline(r.Context(), expiresAt)
+			defer cancel()
+
+			sigBytes, err := s.signerHub.RequestSignature(signCtx, repo.Repo.Did, requestID, msgBytes)
+			if err != nil {
+				switch err {
+				case ErrSignerNotConnected:
+					helpers.InputError(w, new("SignerNotConnected"))
+				case ErrSignerRejected:
+					helpers.InputError(w, new("SignatureRejected"))
+				case ErrSignerTimeout:
+					helpers.InputError(w, new("SignerTimeout"))
+				default:
+					logger.Error("signer error", "error", err)
+					helpers.ServerError(w, nil)
+				}
+				return
+			}
+
+			op.Sig = base64.RawURLEncoding.EncodeToString(sigBytes)
 		}
 
 		if err := s.plcClient.SendOperation(r.Context(), repo.Repo.Did, &op); err != nil {
+			logger.Error("error sending PLC operation", "error", err)
 			helpers.ServerError(w, nil)
 			return
 		}

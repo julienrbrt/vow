@@ -47,49 +47,59 @@ const (
 	AccountSessionMaxAge = 30 * 24 * time.Hour // one week
 )
 
-// IPFSConfig holds configuration for IPFS pinning-based blob storage.
-// Blobs are added to an IPFS node via the Kubo HTTP RPC API and optionally
-// pinned to a remote pinning service that implements the IPFS Pinning Service
-// API spec (e.g. Pinata, web3.storage, Infura).
-type IPFSConfig struct {
-	// BlobstoreEnabled controls whether blobs are stored on IPFS instead of
-	// SQLite.
-	BlobstoreEnabled bool
+// IPFSConfig holds configuration for the IPFS node that the PDS runs
+// alongside. All repo blocks and blob data are stored on and retrieved from
+// the co-located Kubo node — SQLite is used only for relational metadata
+// (accounts, sessions, records index, etc.), not for content.
+// X402Config holds the configuration for the optional x402-gated remote
+// pinning service. When set, accounts that have opted in will have their
+// blobs pinned there after being written to the local Kubo node, with the
+// payment authorised by the user's Ethereum wallet via the browser-based signer.
+type X402Config struct {
+	// PinURL is the base URL of the x402-gated pinning endpoint,
+	// e.g. "https://402.pinata.cloud/v1/pin/public". The PDS POSTs to this
+	// URL with the blob size, receives a 402 with payment requirements, asks
+	// the signer to sign the EIP-3009 payment authorisation, then retries
+	// the request with the X-PAYMENT header.
+	PinURL string
 
-	// NodeURL is the base URL of the Kubo (go-ipfs) RPC API used for adding
-	// blobs, e.g. "http://127.0.0.1:5001".
+	// Network is the CAIP-2 chain identifier required by the pinning service,
+	// e.g. "eip155:8453" for Base Mainnet.
+	Network string
+}
+
+type IPFSConfig struct {
+	// NodeURL is the base URL of the Kubo RPC API, e.g. "http://ipfs:5001"
+	// in Docker or "http://127.0.0.1:5001" locally.
 	NodeURL string
 
-	// GatewayURL is the base URL of the IPFS gateway used to serve blobs, e.g.
-	// "https://ipfs.io" or your own gateway. When set, getBlob redirects to
-	// this URL instead of fetching the content through the node.
+	// GatewayURL is the public-facing IPFS gateway used to serve blobs, e.g.
+	// "http://ipfs:8080" or "https://ipfs.io". When set, sync.getBlob
+	// redirects clients to the gateway instead of proxying through vow.
 	GatewayURL string
 
-	// PinningServiceURL is the URL of a remote IPFS Pinning Service API
-	// endpoint, e.g. "https://api.pinata.cloud/psa". Leave empty to skip
-	// remote pinning.
-	PinningServiceURL string
-
-	// PinningServiceToken is the Bearer token used to authenticate with the
-	// remote pinning service.
-	PinningServiceToken string
+	// X402 is optional. When non-nil, accounts with X402PinningEnabled=true
+	// will have their content additionally pinned via the x402 protocol.
+	X402 *X402Config
 }
 
 type Server struct {
-	http          *http.Client
-	httpd         *http.Server
-	mail          *mailyak.MailYak
-	mailLk        *sync.Mutex
-	router        *chi.Mux
-	db            *db.DB
-	plcClient     *plc.Client
-	logger        *slog.Logger
-	config        *config
-	privateKey    *ecdsa.PrivateKey
-	repoman       *RepoMan
-	oauthProvider *provider.Provider
-	evtman        *events.EventManager
-	passport      *identity.Passport
+	http             *http.Client
+	httpd            *http.Server
+	mail             *mailyak.MailYak
+	mailLk           *sync.Mutex
+	router           *chi.Mux
+	db               *db.DB
+	plcClient        *plc.Client
+	logger           *slog.Logger
+	config           *config
+	privateKey       *ecdsa.PrivateKey
+	repoman          *RepoMan
+	oauthProvider    *provider.Provider
+	evtman           *events.EventManager
+	passport         *identity.Passport
+	signerHub        *SignerHub
+	serviceAuthCache *serviceAuthCache
 
 	sessions         *sessions.CookieStore
 	validator        *validator.Validate
@@ -413,8 +423,10 @@ func New(args *Args) (*Server, error) {
 			SessionCookieKey: args.SessionCookieKey,
 			FallbackProxy:    args.FallbackProxy,
 		},
-		evtman:   events.NewEventManager(evtPersister),
-		passport: identity.NewPassport(h, identity.NewMemCache(10_000)),
+		signerHub:        NewSignerHub(),
+		serviceAuthCache: newServiceAuthCache(),
+		evtman:           events.NewEventManager(evtPersister),
+		passport:         identity.NewPassport(h, identity.NewMemCache(10_000)),
 
 		dbName:     args.DbName,
 		ipfsConfig: args.IPFSConfig,
@@ -524,7 +536,11 @@ func (s *Server) addRoutes() {
 	r.Post("/account/revoke", s.handleAccountRevoke)
 	r.Get("/account/signin", s.handleAccountSigninGet)
 	r.Post("/account/signin", s.handleAccountSigninPost)
+	r.Get("/account/signup", s.handleAccountSignupGet)
+	r.Post("/account/signup", s.handleAccountSignupPost)
 	r.Get("/account/signout", s.handleAccountSignout)
+	r.With(s.handleWebSessionMiddleware).Post("/account/supply-signing-key", s.handleSupplySigningKey)
+	r.Get("/account/signer", s.handleAccountSigner)
 
 	// oauth account
 	r.Get("/oauth/jwks", s.handleOauthJwks)
@@ -562,6 +578,12 @@ func (s *Server) addRoutes() {
 	r.Post("/xrpc/com.atproto.server.requestAccountDelete", authed(s.handleServerRequestAccountDelete).ServeHTTP)
 	r.Post("/xrpc/com.atproto.server.deleteAccount", s.handleServerDeleteAccount)
 
+	// BYOK (Bring Your Own Key) — the browser-based signer registers the
+	// public key and connects for real-time signing over WebSocket.
+	r.Post("/xrpc/com.atproto.server.supplySigningKey", authed(s.handleSupplySigningKey).ServeHTTP)
+	r.Get("/xrpc/com.atproto.server.getSigningKey", authed(s.handleGetSigningKey).ServeHTTP)
+	r.Get("/xrpc/com.atproto.server.signerConnect", authed(s.handleSignerConnect).ServeHTTP)
+
 	// repo
 	r.Get("/xrpc/com.atproto.repo.listMissingBlobs", authed(s.handleListMissingBlobs).ServeHTTP)
 	r.Post("/xrpc/com.atproto.repo.createRecord", authed(s.handleCreateRecord).ServeHTTP)
@@ -598,12 +620,12 @@ func (s *Server) Serve(ctx context.Context) error {
 		&models.Repo{},
 		&models.InviteCode{},
 		&models.InviteCodeUse{},
+
+		&models.PendingWrite{},
 		&models.Token{},
 		&models.RefreshToken{},
-		&models.Block{},
 		&models.Record{},
 		&models.Blob{},
-		&models.BlobPart{},
 		&models.ReservedKey{},
 		&provider.OauthToken{},
 		&provider.OauthAuthorizationRequest{},
@@ -612,6 +634,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 
 	logger.Info("starting vow")
+
+	s.serviceAuthCache.startEvictionLoop(ctx)
 
 	go func() {
 		if err := s.httpd.ListenAndServe(); err != nil {

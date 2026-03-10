@@ -78,11 +78,11 @@ func init() {
 	pf.String(flagSmtpPort, "", "SMTP port")
 	pf.String(flagSmtpEmail, "", "SMTP from address")
 	pf.String(flagSmtpName, "", "SMTP from name")
-	pf.Bool(flagIpfsBlobstoreEnabled, false, "Store blobs on IPFS via the Kubo HTTP RPC API instead of SQLite")
-	pf.String(flagIpfsNodeUrl, "http://127.0.0.1:5001", "Base URL of the Kubo (go-ipfs) RPC API used for adding and fetching blobs")
-	pf.String(flagIpfsGatewayUrl, "", "Public IPFS gateway URL for blob redirects (e.g. https://ipfs.io). When set, getBlob redirects to this URL instead of proxying through the node")
-	pf.String(flagIpfsPinningServiceUrl, "", "Remote IPFS Pinning Service API endpoint (e.g. https://api.pinata.cloud/psa). Leave empty to skip remote pinning")
-	pf.String(flagIpfsPinningServiceToken, "", "Bearer token for authenticating with the remote IPFS pinning service")
+	pf.String(flagIpfsNodeUrl, "http://127.0.0.1:5001", "Base URL of the Kubo RPC API (e.g. http://127.0.0.1:5001 or http://ipfs:5001 in Docker). All repo blocks and blobs are stored via this node")
+	pf.String(flagIpfsGatewayUrl, "", "Public IPFS gateway URL for blob redirects (e.g. http://localhost:8080). When set, sync.getBlob redirects to the gateway instead of proxying through vow")
+	pf.String(flagX402PinURL, "", "x402-gated remote pinning endpoint (e.g. https://402.pinata.cloud/v1/pin/public). When set, accounts with x402 pinning enabled will have blobs pinned here after local storage, with payment signed by the user's Ethereum wallet")
+	pf.String(flagX402Network, "eip155:8453", "CAIP-2 chain identifier required by the x402 pinning service (e.g. eip155:8453 for Base Mainnet)")
+
 	pf.String(flagSessionSecret, "", "Session secret")
 	pf.String(flagSessionCookieKey, "session", "Session cookie key name")
 
@@ -188,11 +188,17 @@ func newServeCmd(v *viper.Viper) *cobra.Command {
 				SmtpEmail:       v.GetString(flagSmtpEmail),
 				SmtpName:        v.GetString(flagSmtpName),
 				IPFSConfig: &server.IPFSConfig{
-					BlobstoreEnabled:    v.GetBool(flagIpfsBlobstoreEnabled),
-					NodeURL:             v.GetString(flagIpfsNodeUrl),
-					GatewayURL:          v.GetString(flagIpfsGatewayUrl),
-					PinningServiceURL:   v.GetString(flagIpfsPinningServiceUrl),
-					PinningServiceToken: v.GetString(flagIpfsPinningServiceToken),
+					NodeURL:    v.GetString(flagIpfsNodeUrl),
+					GatewayURL: v.GetString(flagIpfsGatewayUrl),
+					X402: func() *server.X402Config {
+						if u := v.GetString(flagX402PinURL); u != "" {
+							return &server.X402Config{
+								PinURL:  u,
+								Network: v.GetString(flagX402Network),
+							}
+						}
+						return nil
+					}(),
 				},
 				SessionSecret:    v.GetString(flagSessionSecret),
 				SessionCookieKey: v.GetString(flagSessionCookieKey),

@@ -17,7 +17,6 @@ import (
 	"github.com/bluesky-social/indigo/util"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
-	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -160,6 +159,11 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For the genesis commit we use a temporary ephemeral key. The PDS never
+	// stores it — as soon as the commit is written the key is discarded. The
+	// user must call supplySigningKey (via the account page) before any
+	// subsequent write will succeed, because applyWrites requires a registered
+	// public key and a connected signer.
 	var k *atcrypto.PrivateKeyK256
 
 	if signupDid != "" {
@@ -183,9 +187,10 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if k == nil {
+		// Generate an ephemeral key for the genesis commit only.
 		k, err = atcrypto.GeneratePrivateKeyK256()
 		if err != nil {
-			logger.Error("error creating signing key", "endpoint", "com.atproto.server.createAccount", "error", err)
+			logger.Error("error generating ephemeral key", "endpoint", "com.atproto.server.createAccount", "error", err)
 			helpers.ServerError(w, nil)
 			return
 		}
@@ -214,13 +219,15 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SigningKey is intentionally left nil — the PDS never stores a private
+	// key. PublicKey will be populated later when the user calls
+	// supplySigningKey via the account page.
 	urepo := models.Repo{
 		Did:                   signupDid,
 		CreatedAt:             time.Now(),
 		Email:                 request.Email,
 		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
 		Password:              string(hashed),
-		SigningKey:            k.Bytes(),
 	}
 
 	if actor == nil {
@@ -249,7 +256,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if request.Did == nil || *request.Did == "" {
-		bs := vowblockstore.New(signupDid, s.db)
+		bs := newBlockstoreForRepo(signupDid, s.ipfsConfig)
 
 		clk := syntax.NewTIDClock(0)
 		r := &atp.Repo{
@@ -259,7 +266,9 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 			RecordStore: bs,
 		}
 
-		root, rev, err := commitRepo(ctx, bs, r, urepo.SigningKey)
+		// Sign the genesis commit with the ephemeral key. This key is never
+		// persisted; it is only used to produce a valid initial commit block.
+		root, rev, err := commitRepo(ctx, bs, r, k.Bytes())
 		if err != nil {
 			logger.Error("error committing", "error", err)
 			helpers.ServerError(w, nil)

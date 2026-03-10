@@ -8,7 +8,6 @@ import (
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
-	vowblockstore "pkg.rbrt.fr/vow/blockstore"
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
@@ -72,7 +71,7 @@ func (s *Server) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := vowblockstore.New(urepo.Repo.Did, s.db)
+	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsConfig)
 
 	for _, c := range cids {
 		b, err := bs.Get(ctx, c)

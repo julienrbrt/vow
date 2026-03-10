@@ -2,12 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -26,6 +27,15 @@ type ComAtprotoSignPlcOperationResponse struct {
 	Operation plc.Operation `json:"operation"`
 }
 
+// handleSignPlcOperation builds a PLC operation from the request fields,
+// sends the CBOR-encoded payload to the user's signer for signing via the
+// SignerHub WebSocket, then returns the signed operation so the client
+// can submit it to the PLC directory.
+//
+// Unlike the previous implementation this handler never touches a private key.
+// The rotation key (held by the PDS) signs the PLC operation envelope as
+// required by the PLC protocol; the user's signing key (held in their Ethereum
+// wallet) signs only the inner payload bytes delivered over the WebSocket.
 func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleSignPlcOperation")
 
@@ -58,6 +68,7 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Fetch the current DID document so we can build on the latest operation.
 	ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)
 	log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 	if err != nil {
@@ -89,24 +100,77 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 		op.Services = *req.Services
 	}
 
-	k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
+	// Serialise the operation to CBOR — this is the payload the user's wallet
+	// must sign. We send it to the signer and wait for the signature.
+	opCBOR, err := op.MarshalCBOR()
 	if err != nil {
-		logger.Error("error parsing signing key", "error", err)
+		logger.Error("error marshalling PLC op to CBOR", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
 
-	if err := s.plcClient.SignOp(k, &op); err != nil {
-		logger.Error("error signing plc operation", "error", err)
+	// Check that the signer is connected before we do anything that
+	// would leave the operation in a half-applied state.
+	if !s.signerHub.IsConnected(repo.Repo.Did) {
+		helpers.InputError(w, new("SignerNotConnected"))
+		return
+	}
+
+	requestID := uuid.NewString()
+	expiresAt := time.Now().Add(signerRequestTimeout)
+
+	// Summarise the operation for the signer's approval UI.
+	pendingOps := []PendingWriteOp{
+		{
+			Type:       "plc_operation",
+			Collection: "identity",
+		},
+	}
+
+	payloadB64 := base64.RawURLEncoding.EncodeToString(opCBOR)
+	msgBytes, err := buildSignRequestMsg(requestID, repo.Repo.Did, payloadB64, pendingOps, expiresAt)
+	if err != nil {
+		logger.Error("error building sign request message", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
 
-	if err := s.db.Exec(ctx, "UPDATE repos SET plc_operation_code = NULL, plc_operation_code_expires_at = NULL WHERE did = ?", nil, repo.Repo.Did).Error; err != nil {
-		logger.Error("error updating repo", "error", err)
+	signCtx, cancel := context.WithDeadline(r.Context(), expiresAt)
+	defer cancel()
+
+	sigBytes, err := s.signerHub.RequestSignature(signCtx, repo.Repo.Did, requestID, msgBytes)
+	if err != nil {
+		switch err {
+		case ErrSignerNotConnected:
+			helpers.InputError(w, new("SignerNotConnected"))
+		case ErrSignerRejected:
+			helpers.InputError(w, new("SignatureRejected"))
+		case ErrSignerTimeout:
+			helpers.InputError(w, new("SignerTimeout"))
+		default:
+			logger.Error("signer error", "error", err)
+			helpers.ServerError(w, nil)
+		}
+		return
+	}
+
+	// Attach the user's signature to the operation.
+	op.Sig = base64.RawURLEncoding.EncodeToString(sigBytes)
+
+	// Clear the one-time token now that it has been consumed.
+	if err := s.db.Exec(ctx,
+		"UPDATE repos SET plc_operation_code = NULL, plc_operation_code_expires_at = NULL WHERE did = ?",
+		nil, repo.Repo.Did,
+	).Error; err != nil {
+		logger.Error("error clearing plc operation code", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
+
+	logger.Info("PLC operation signed via signer",
+		"did", repo.Repo.Did,
+		"requestId", requestID,
+	)
 
 	s.writeJSON(w, 200, ComAtprotoSignPlcOperationResponse{
 		Operation: op,

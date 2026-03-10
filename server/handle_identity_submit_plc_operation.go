@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
+	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 	"pkg.rbrt.fr/vow/plc"
@@ -45,39 +47,72 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 
 	op := req.Operation
 
-	k, err := atcrypto.ParsePrivateBytesK256(repo.SigningKey)
+	// Validate the submitted operation against the current DID document and
+	// the stored public key. We check:
+	//   1. The signing key (verificationMethods.atproto) matches the registered key.
+	//   2. The service endpoint still points to this PDS.
+	//   3. The rotation keys include at least one key that was already authorised
+	//      (either the user's wallet key or the PDS key, depending on whether
+	//      sovereignty has been transferred).
+	//   4. The operation was signed by one of the current rotation keys (enforced
+	//      by plc.directory on submission, not re-checked here).
+
+	if len(repo.PublicKey) == 0 {
+		helpers.InputError(w, new("no signing key registered for this account"))
+		return
+	}
+
+	pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
 	if err != nil {
-		logger.Error("error parsing key", "error", err)
+		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
-	required, err := s.plcClient.CreateDidCredentials(k, "", repo.Handle)
+
+	// Fetch the current DID document to get the authoritative rotation keys.
+	auditCtx := context.WithValue(ctx, identity.SkipCacheKey, true)
+	auditLog, err := identity.FetchDidAuditLog(auditCtx, nil, repo.Repo.Did)
+	if err != nil {
+		logger.Error("error fetching DID audit log", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+	currentRotationKeys := auditLog[len(auditLog)-1].Operation.RotationKeys
+
+	// The submitted operation must retain at least one of the current rotation
+	// keys. This prevents an operation from locking out all authorised signers.
+	hasAuthorisedRotationKey := false
+	for _, rk := range op.RotationKeys {
+		if slices.Contains(currentRotationKeys, rk) {
+			hasAuthorisedRotationKey = true
+			break
+		}
+	}
+	if !hasAuthorisedRotationKey {
+		helpers.InputError(w, new("operation must retain at least one current rotation key"))
+		return
+	}
+
+	// The signing key must match the registered public key.
+	userDIDKey := pubKey.DIDKey()
+	if op.VerificationMethods["atproto"] != userDIDKey {
+		helpers.InputError(w, new("verificationMethods.atproto must match the registered signing key"))
+		return
+	}
+
+	// The service endpoint must still point to this PDS.
+	required, err := s.plcClient.CreateDidCredentialsFromPublicKey(pubKey, "", repo.Handle)
 	if err != nil {
 		logger.Error("error creating did credentials", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
-
-	for _, expectedKey := range required.RotationKeys {
-		if !slices.Contains(op.RotationKeys, expectedKey) {
-			helpers.InputError(w, nil)
-			return
-		}
-	}
 	if op.Services["atproto_pds"].Type != "AtprotoPersonalDataServer" {
-		helpers.InputError(w, nil)
+		helpers.InputError(w, new("services.atproto_pds must be AtprotoPersonalDataServer"))
 		return
 	}
 	if op.Services["atproto_pds"].Endpoint != required.Services["atproto_pds"].Endpoint {
-		helpers.InputError(w, nil)
-		return
-	}
-	if op.VerificationMethods["atproto"] != required.VerificationMethods["atproto"] {
-		helpers.InputError(w, nil)
-		return
-	}
-	if op.AlsoKnownAs[0] != required.AlsoKnownAs[0] {
-		helpers.InputError(w, nil)
+		helpers.InputError(w, new("services.atproto_pds endpoint must point to this PDS"))
 		return
 	}
 

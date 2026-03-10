@@ -1,0 +1,312 @@
+package blockstore
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"maps"
+	"mime/multipart"
+	"net/http"
+	"sync"
+
+	blocks "github.com/ipfs/go-block-format"
+	"github.com/ipfs/go-cid"
+)
+
+// IPFSBlockstore stores and retrieves blocks via a Kubo (go-ipfs) node using
+// its HTTP RPC API. It implements the boxo blockstore.Blockstore interface so
+// it can be used as a drop-in replacement for the SQLite-backed store.
+//
+// Blocks are written to IPFS via /api/v0/block/put and read back via
+// /api/v0/block/get. A local in-memory cache of pending writes is kept so
+// that blocks are immediately readable within the same commit cycle before
+// the IPFS node has finished processing them.
+type IPFSBlockstore struct {
+	nodeURL string
+	did     string
+	rev     string
+	cli     *http.Client
+
+	mu      sync.RWMutex
+	inserts map[cid.Cid]blocks.Block
+}
+
+// NewIPFS creates a new IPFSBlockstore that talks to the Kubo node at nodeURL.
+func NewIPFS(did string, nodeURL string, cli *http.Client) *IPFSBlockstore {
+	if nodeURL == "" {
+		nodeURL = "http://127.0.0.1:5001"
+	}
+	if cli == nil {
+		cli = http.DefaultClient
+	}
+	return &IPFSBlockstore{
+		nodeURL: nodeURL,
+		did:     did,
+		cli:     cli,
+		inserts: make(map[cid.Cid]blocks.Block),
+	}
+}
+
+// SetRev sets the revision string. This satisfies the revSetter interface used
+// by commitRepo so that the blockstore is compatible with the repo commit flow.
+func (bs *IPFSBlockstore) SetRev(rev string) {
+	bs.rev = rev
+}
+
+// Get retrieves a block by CID. It first checks the local write cache and
+// falls back to the IPFS node.
+func (bs *IPFSBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) {
+	bs.mu.RLock()
+	if blk, ok := bs.inserts[c]; ok {
+		bs.mu.RUnlock()
+		return blk, nil
+	}
+	bs.mu.RUnlock()
+
+	endpoint := fmt.Sprintf("%s/api/v0/block/get?arg=%s", bs.nodeURL, c.String())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs block/get: building request: %w", err)
+	}
+
+	resp, err := bs.cli.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs block/get: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ipfs block/get returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs block/get: reading body: %w", err)
+	}
+
+	blk, err := blocks.NewBlockWithCid(data, c)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs block/get: creating block: %w", err)
+	}
+
+	return blk, nil
+}
+
+// Put writes a single block to the IPFS node and caches it locally.
+func (bs *IPFSBlockstore) Put(ctx context.Context, block blocks.Block) error {
+	bs.mu.Lock()
+	bs.inserts[block.Cid()] = block
+	bs.mu.Unlock()
+
+	if err := bs.putToIPFS(ctx, block); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// PutMany writes multiple blocks to the IPFS node in sequence.
+func (bs *IPFSBlockstore) PutMany(ctx context.Context, blks []blocks.Block) error {
+	for _, blk := range blks {
+		bs.mu.Lock()
+		bs.inserts[blk.Cid()] = blk
+		bs.mu.Unlock()
+
+		if err := bs.putToIPFS(ctx, blk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error {
+	// Use /api/v0/block/put with the correct codec and hash so the IPFS node
+	// stores the block under the exact same CID we computed locally.
+	pref := blk.Cid().Prefix()
+
+	codecName, err := codecToName(pref.Codec)
+	if err != nil {
+		return err
+	}
+	mhName, err := mhtypeToName(pref.MhType)
+	if err != nil {
+		return err
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/api/v0/block/put?cid-codec=%s&mhtype=%s&mhlen=%d&pin=true",
+		bs.nodeURL, codecName, mhName, pref.MhLength,
+	)
+
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("data", "block")
+	if err != nil {
+		return fmt.Errorf("ipfs block/put: creating multipart: %w", err)
+	}
+
+	if _, err := part.Write(blk.RawData()); err != nil {
+		return fmt.Errorf("ipfs block/put: writing data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("ipfs block/put: closing writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("ipfs block/put: building request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := bs.cli.Do(req)
+	if err != nil {
+		return fmt.Errorf("ipfs block/put: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ipfs block/put returned %d: %s", resp.StatusCode, string(msg))
+	}
+
+	// Verify the CID returned by the node matches what we expect.
+	var result struct {
+		Key  string `json:"Key"`
+		Size int    `json:"Size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("ipfs block/put: decoding response: %w", err)
+	}
+
+	returnedCid, err := cid.Decode(result.Key)
+	if err != nil {
+		return fmt.Errorf("ipfs block/put: parsing returned CID: %w", err)
+	}
+
+	if !returnedCid.Equals(blk.Cid()) {
+		return fmt.Errorf("ipfs block/put: CID mismatch: expected %s, got %s", blk.Cid(), returnedCid)
+	}
+
+	return nil
+}
+
+// Has checks the local cache first, then asks the IPFS node.
+func (bs *IPFSBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
+	bs.mu.RLock()
+	if _, ok := bs.inserts[c]; ok {
+		bs.mu.RUnlock()
+		return true, nil
+	}
+	bs.mu.RUnlock()
+
+	endpoint := fmt.Sprintf("%s/api/v0/block/stat?arg=%s", bs.nodeURL, c.String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := bs.cli.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+// GetSize returns the size of the block data.
+func (bs *IPFSBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
+	blk, err := bs.Get(ctx, c)
+	if err != nil {
+		return 0, err
+	}
+	return len(blk.RawData()), nil
+}
+
+// DeleteBlock is a no-op for IPFS; blocks are garbage-collected by the node.
+func (bs *IPFSBlockstore) DeleteBlock(ctx context.Context, c cid.Cid) error {
+	bs.mu.Lock()
+	delete(bs.inserts, c)
+	bs.mu.Unlock()
+
+	// Attempt to unpin; ignore errors since the block may not be pinned
+	// individually (it could be part of a DAG pin).
+	endpoint := fmt.Sprintf("%s/api/v0/pin/rm?arg=%s", bs.nodeURL, c.String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := bs.cli.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return nil
+}
+
+// AllKeysChan is not supported on the IPFS blockstore.
+func (bs *IPFSBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, error) {
+	return nil, fmt.Errorf("iteration not supported on IPFS blockstore")
+}
+
+// HashOnRead is a no-op.
+func (bs *IPFSBlockstore) HashOnRead(bool) {}
+
+// GetWriteLog returns the blocks written during this session, matching the
+// interface used by RecordingBlockstore for firehose event construction.
+func (bs *IPFSBlockstore) GetWriteLog() map[cid.Cid]blocks.Block {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+
+	out := make(map[cid.Cid]blocks.Block, len(bs.inserts))
+	maps.Copy(out, bs.inserts)
+	return out
+}
+
+// codecToName converts a CID codec number to the string name expected by the
+// Kubo /api/v0/block/put endpoint.
+func codecToName(codec uint64) (string, error) {
+	switch codec {
+	case cid.DagCBOR:
+		return "dag-cbor", nil
+	case cid.DagProtobuf:
+		return "dag-pb", nil
+	case cid.Raw:
+		return "raw", nil
+	case cid.DagJSON:
+		return "dag-json", nil
+	default:
+		return fmt.Sprintf("0x%x", codec), nil
+	}
+}
+
+// mhtypeToName converts a multihash type code to its string name.
+func mhtypeToName(mhtype uint64) (string, error) {
+	switch mhtype {
+	case 0x12: // sha2-256
+		return "sha2-256", nil
+	case 0x13: // sha2-512
+		return "sha2-512", nil
+	case 0x14: // sha3-512
+		return "sha3-512", nil
+	case 0x15: // sha3-384
+		return "sha3-384", nil
+	case 0x16: // sha3-256
+		return "sha3-256", nil
+	case 0x1e: // blake3
+		return "blake3", nil
+	case 0x00: // identity
+		return "identity", nil
+	default:
+		return "", fmt.Errorf("unsupported multihash type: 0x%x", mhtype)
+	}
+}

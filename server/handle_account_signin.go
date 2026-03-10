@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/gorilla/sessions"
@@ -16,10 +15,9 @@ import (
 )
 
 type OauthSigninInput struct {
-	Username        string `form:"username"`
-	Password        string `form:"password"`
-	AuthFactorToken string `form:"token"`
-	QueryParams     string `form:"query_params"`
+	Username    string `form:"username"`
+	Password    string `form:"password"`
+	QueryParams string `form:"query_params"`
 }
 
 func (s *Server) getSessionRepoOrErr(r *http.Request) (*models.RepoActor, *sessions.Session, error) {
@@ -50,9 +48,8 @@ func (s *Server) getFlashesFromSession(w http.ResponseWriter, r *http.Request, s
 		}
 	}()
 	return map[string]any{
-		"errors":        sess.Flashes("error"),
-		"successes":     sess.Flashes("success"),
-		"tokenrequired": sess.Flashes("tokenrequired"),
+		"errors":    sess.Flashes("error"),
+		"successes": sess.Flashes("success"),
 	}
 }
 
@@ -82,10 +79,9 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 	}
 
 	req := OauthSigninInput{
-		Username:        r.FormValue("username"),
-		Password:        r.FormValue("password"),
-		AuthFactorToken: r.FormValue("token"),
-		QueryParams:     r.FormValue("query_params"),
+		Username:    r.FormValue("username"),
+		Password:    r.FormValue("password"),
+		QueryParams: r.FormValue("query_params"),
 	}
 
 	sess, _ := s.sessions.Get(r, s.config.SessionCookieKey)
@@ -140,58 +136,6 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		}
 		http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
 		return
-	}
-
-	// if repo requires 2FA token and one hasn't been provided, return error prompting for one
-	if repo.TwoFactorType != models.TwoFactorTypeNone && req.AuthFactorToken == "" {
-		err = s.createAndSendTwoFactorCode(ctx, repo)
-		if err != nil {
-			sess.AddFlash("Something went wrong!", "error")
-			if err := sess.Save(r, w); err != nil {
-				logger.Error("failed to save session", "error", err)
-			}
-			http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
-			return
-		}
-
-		sess.AddFlash("requires 2FA token", "tokenrequired")
-		if err := sess.Save(r, w); err != nil {
-			logger.Error("failed to save session", "error", err)
-		}
-		http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
-		return
-	}
-
-	// if 2FA is required, now check that the one provided is valid
-	if repo.TwoFactorType != models.TwoFactorTypeNone {
-		if repo.TwoFactorCode == nil || repo.TwoFactorCodeExpiresAt == nil {
-			err = s.createAndSendTwoFactorCode(ctx, repo)
-			if err != nil {
-				sess.AddFlash("Something went wrong!", "error")
-				if err := sess.Save(r, w); err != nil {
-					logger.Error("failed to save session", "error", err)
-				}
-				http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
-				return
-			}
-
-			sess.AddFlash("requires 2FA token", "tokenrequired")
-			if err := sess.Save(r, w); err != nil {
-				logger.Error("failed to save session", "error", err)
-			}
-			http.Redirect(w, r, "/account/signin"+queryParams, http.StatusSeeOther)
-			return
-		}
-
-		if *repo.TwoFactorCode != req.AuthFactorToken {
-			helpers.InvalidTokenError(w)
-			return
-		}
-
-		if time.Now().UTC().After(*repo.TwoFactorCodeExpiresAt) {
-			helpers.ExpiredTokenError(w)
-			return
-		}
 	}
 
 	sess.Options = &sessions.Options{
