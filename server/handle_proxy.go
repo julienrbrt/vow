@@ -91,18 +91,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// cache the resulting token so repeated proxy calls for the same
 		// (aud, lxm) pair reuse it instead of prompting the wallet each time.
 		token, err := s.signServiceAuthJWT(r.Context(), repo, aud, lxm, 0)
+		if helpers.HandleSignerError(w, err) {
+			logger.Error("error signing proxy JWT", "error", err)
+			return
+		}
 		if err != nil {
-			switch err {
-			case ErrSignerNotConnected:
-				helpers.InputError(w, new("SignerNotConnected"))
-			case ErrSignerRejected:
-				helpers.InputError(w, new("SignatureRejected"))
-			case ErrSignerTimeout:
-				helpers.InputError(w, new("SignerTimeout"))
-			default:
-				logger.Error("error signing proxy JWT", "error", err)
-				helpers.ServerError(w, nil)
-			}
+			logger.Error("error signing proxy JWT", "error", err)
+			helpers.ServerError(w, nil)
 			return
 		}
 

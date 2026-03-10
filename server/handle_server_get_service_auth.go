@@ -64,24 +64,14 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 
 	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	if !s.signerHub.IsConnected(repo.Repo.Did) {
-		helpers.InputError(w, new("SignerNotConnected"))
+	token, err := s.signServiceAuthJWT(r.Context(), repo, req.Aud, req.Lxm, exp)
+	if helpers.HandleSignerError(w, err) {
+		logger.Error("error signing service auth JWT", "error", err)
 		return
 	}
-
-	token, err := s.signServiceAuthJWT(r.Context(), repo, req.Aud, req.Lxm, exp)
 	if err != nil {
-		switch err {
-		case ErrSignerNotConnected:
-			helpers.InputError(w, new("SignerNotConnected"))
-		case ErrSignerRejected:
-			helpers.InputError(w, new("SignatureRejected"))
-		case ErrSignerTimeout:
-			helpers.InputError(w, new("SignerTimeout"))
-		default:
-			logger.Error("error signing service auth JWT", "error", err)
-			helpers.ServerError(w, nil)
-		}
+		logger.Error("error signing service auth JWT", "error", err)
+		helpers.ServerError(w, nil)
 		return
 	}
 

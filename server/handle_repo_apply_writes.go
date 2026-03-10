@@ -65,7 +65,7 @@ func (s *Server) handleApplyWrites(w http.ResponseWriter, r *http.Request) {
 	results, err := s.repoman.applyWrites(ctx, repo.Repo, ops, req.SwapCommit)
 	if err != nil {
 		logger.Error("error applying writes", "error", err)
-		helpers.ServerError(w, nil)
+		helpers.HandleSignerError(w, err)
 		return
 	}
 

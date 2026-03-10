@@ -12,6 +12,19 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
+var (
+	// ErrSignerNotConnected is the sentinel returned when no wallet is connected.
+	ErrSignerNotConnected = errors.New("signer not connected")
+
+	// ErrSignerRejected is the sentinel returned when the wallet rejected the
+	// signing request.
+	ErrSignerRejected = errors.New("signer rejected")
+
+	// ErrSignerTimeout is the sentinel returned when the wallet did not respond
+	// within the deadline.
+	ErrSignerTimeout = errors.New("signer timeout")
+)
+
 // Invite code alphabet.
 var letters = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
@@ -27,6 +40,45 @@ func InputError(w http.ResponseWriter, custom *string) {
 		msg = *custom
 	}
 	genericError(w, http.StatusBadRequest, msg)
+}
+
+// HandleSignerError maps the three signer sentinel errors to ATProto-compatible
+// HTTP 400 responses with descriptive error codes, and falls back to a 500 for
+// anything else. Returns true if err was non-nil (so callers can use it as a
+// guard).
+//
+// The error codes follow the ATProto convention used by the official PDS:
+//   - "AccountNotFound"  — no wallet tab is open / connected.
+//   - "UserTookDownRepo" — the user explicitly rejected the signing prompt.
+//   - "RepoDeactivated"  — the signing deadline elapsed with no response.
+//
+// These are the closest standard codes to what happened; they tell AppViews
+// and clients something meaningful without leaking internal implementation
+// details.
+func HandleSignerError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, ErrSignerNotConnected):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "AccountNotFound",
+			"message": "No wallet signer is connected for this account. Open the account page and keep it in a browser tab.",
+		})
+	case errors.Is(err, ErrSignerRejected):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "UserTookDownRepo",
+			"message": "The wallet rejected the signing request.",
+		})
+	case errors.Is(err, ErrSignerTimeout):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "RepoDeactivated",
+			"message": "The wallet did not respond within the signing deadline.",
+		})
+	default:
+		ServerError(w, nil)
+	}
+	return true
 }
 
 func ServerError(w http.ResponseWriter, suffix *string) {

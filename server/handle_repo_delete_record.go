@@ -51,7 +51,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}, req.SwapCommit)
 	if err != nil {
 		logger.Error("error applying writes", "error", err)
-		helpers.ServerError(w, nil)
+		helpers.HandleSignerError(w, err)
 		return
 	}
 

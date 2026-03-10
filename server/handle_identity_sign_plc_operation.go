@@ -109,13 +109,6 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check that the signer is connected before we do anything that
-	// would leave the operation in a half-applied state.
-	if !s.signerHub.IsConnected(repo.Repo.Did) {
-		helpers.InputError(w, new("SignerNotConnected"))
-		return
-	}
-
 	requestID := uuid.NewString()
 	expiresAt := time.Now().Add(signerRequestTimeout)
 
@@ -139,18 +132,8 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	sigBytes, err := s.signerHub.RequestSignature(signCtx, repo.Repo.Did, requestID, msgBytes)
-	if err != nil {
-		switch err {
-		case ErrSignerNotConnected:
-			helpers.InputError(w, new("SignerNotConnected"))
-		case ErrSignerRejected:
-			helpers.InputError(w, new("SignatureRejected"))
-		case ErrSignerTimeout:
-			helpers.InputError(w, new("SignerTimeout"))
-		default:
-			logger.Error("signer error", "error", err)
-			helpers.ServerError(w, nil)
-		}
+	if helpers.HandleSignerError(w, err) {
+		logger.Error("signer error during PLC operation signing", "did", repo.Repo.Did, "error", err)
 		return
 	}
 

@@ -91,11 +91,6 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 			// Rotation key belongs to the user's wallet. Delegate the
 			// signing to the signer over WebSocket, same as
 			// handleSignPlcOperation does for other PLC operations.
-			if !s.signerHub.IsConnected(repo.Repo.Did) {
-				helpers.InputError(w, new("SignerNotConnected"))
-				return
-			}
-
 			opCBOR, err := op.MarshalCBOR()
 			if err != nil {
 				logger.Error("error marshalling PLC op to CBOR", "error", err)
@@ -126,18 +121,8 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 			defer cancel()
 
 			sigBytes, err := s.signerHub.RequestSignature(signCtx, repo.Repo.Did, requestID, msgBytes)
-			if err != nil {
-				switch err {
-				case ErrSignerNotConnected:
-					helpers.InputError(w, new("SignerNotConnected"))
-				case ErrSignerRejected:
-					helpers.InputError(w, new("SignatureRejected"))
-				case ErrSignerTimeout:
-					helpers.InputError(w, new("SignerTimeout"))
-				default:
-					logger.Error("signer error", "error", err)
-					helpers.ServerError(w, nil)
-				}
+			if helpers.HandleSignerError(w, err) {
+				logger.Error("signer error during handle update", "did", repo.Repo.Did, "error", err)
 				return
 			}
 

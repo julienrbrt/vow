@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 // handleAccountSigner upgrades an account session to a signer WebSocket.
@@ -40,7 +41,10 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 
 	// Replace any existing signer connection for this DID.
 	sc := s.signerHub.Register(did)
-	defer s.signerHub.Unregister(did, sc)
+	defer func() {
+		s.signerHub.Unregister(did, sc)
+		sc.failAll(helpers.ErrSignerNotConnected)
+	}()
 
 	// Keep the connection alive.
 	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
@@ -58,6 +62,7 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 
 	readErr := make(chan error, 1)
 	inbound := make(chan wsIncoming, 4)
+	nextReq := make(chan signerRequest, 1)
 
 	ctx := r.Context()
 	go func() {
@@ -75,6 +80,22 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 			select {
 			case inbound <- in:
 			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			req, ok := sc.NextRequest(ctx)
+			if !ok {
+				return
+			}
+			select {
+			case nextReq <- req:
+			case <-ctx.Done():
+				return
+			case <-sc.done:
 				return
 			}
 		}
@@ -133,14 +154,10 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 				logger.Warn("signer: unknown message type", "did", did, "type", in.Type)
 			}
 
-		case req, ok := <-sc.requests:
-			if !ok {
-				return
-			}
-
+		case req := <-nextReq:
 			if err := conn.WriteMessage(websocket.TextMessage, req.msg); err != nil {
 				logger.Error("signer: failed to write request", "did", did, "error", err)
-				req.reply <- signerReply{err: ErrSignerNotConnected}
+				req.reply <- signerReply{err: helpers.ErrSignerNotConnected}
 				return
 			}
 

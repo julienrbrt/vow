@@ -109,7 +109,10 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 	// Register this connection with the hub, evicting any previous connection
 	// for the same DID.
 	sc := s.signerHub.Register(did)
-	defer s.signerHub.Unregister(did, sc)
+	defer func() {
+		s.signerHub.Unregister(did, sc)
+		sc.failAll(helpers.ErrSignerNotConnected)
+	}()
 
 	// Configure the pong deadline handler: whenever a pong arrives we extend
 	// the read deadline by another 30 s.
@@ -141,9 +144,14 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 	// inbound carries decoded messages from the reader goroutine.
 	inbound := make(chan wsIncoming, 4)
 
-	// Start the read pump in a separate goroutine because conn.ReadMessage
-	// blocks and we also need to be able to write (sign_request) concurrently.
+	// nextReq carries the next queued request to be sent to the wallet.
+	// The NextRequest goroutine blocks until a request is ready and no other
+	// request is in-flight (serialising wallet prompts automatically).
+	nextReq := make(chan signerRequest, 1)
+
 	ctx := r.Context()
+
+	// Read pump: conn.ReadMessage blocks so it runs in its own goroutine.
 	go func() {
 		for {
 			_, msg, err := conn.ReadMessage()
@@ -159,6 +167,24 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 			select {
 			case inbound <- in:
 			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Queue pump: feeds the main loop one request at a time, respecting the
+	// wallet's one-at-a-time constraint enforced inside NextRequest.
+	go func() {
+		for {
+			req, ok := sc.NextRequest(ctx)
+			if !ok {
+				return
+			}
+			select {
+			case nextReq <- req:
+			case <-ctx.Done():
+				return
+			case <-sc.done:
 				return
 			}
 		}
@@ -235,21 +261,11 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 				logger.Warn("signer: unknown message type", "did", did, "type", in.Type)
 			}
 
-		// ── new signing request from a write handler ──────────────────────
-		case req, ok := <-sc.requests:
-			if !ok {
-				// Channel was closed; connection is being evicted.
-				return
-			}
-
-			// Build the sign_request frame.
-			// The payload is already base64url-encoded by the caller (stored in
-			// req.msg as raw JSON). We use req.msg directly as it was assembled
-			// by buildSignRequestMsg or buildPayRequestMsg.
+		// ── next queued signing request ready to send ─────────────────────
+		case req := <-nextReq:
 			if err := conn.WriteMessage(websocket.TextMessage, req.msg); err != nil {
 				logger.Error("signer: failed to write request", "did", did, "error", err)
-				// Unblock the waiting write handler immediately.
-				req.reply <- signerReply{err: ErrSignerNotConnected}
+				req.reply <- signerReply{err: helpers.ErrSignerNotConnected}
 				return
 			}
 
