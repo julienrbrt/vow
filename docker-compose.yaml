@@ -5,9 +5,9 @@ services:
       dockerfile: Dockerfile
     container_name: vow-init-keys
     volumes:
-      - /opt/vowpds/keys:/keys
-      - /opt/vowpds/data:/data/vow
-      - /opt/vowpds/init-keys.sh:/init-keys.sh:ro
+      - ./keys:/keys
+      - ./data:/data/vow
+      - ./init-keys.sh:/init-keys.sh:ro
     environment:
       VOW_DID: ${VOW_DID}
       VOW_HOSTNAME: ${VOW_HOSTNAME}
@@ -52,9 +52,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - /opt/vowpds/data:/data/vow
-      - /opt/vowpds/keys/rotation.key:/keys/rotation.key:ro
-      - /opt/vowpds/keys/jwk.key:/keys/jwk.key:ro
+      - ./data:/data/vow
+      - ./keys:/keys:ro
     environment:
       # Required
       VOW_DID: ${VOW_DID}
@@ -106,9 +105,9 @@ services:
     container_name: vow-create-invite
     network_mode: "service:vow"
     volumes:
-      - /opt/vowpds/keys:/keys
-      - /opt/vowpds/data:/data/vow
-      - /opt/vowpds/create-initial-invite.sh:/create-initial-invite.sh:ro
+      - ./keys:/keys
+      - ./data:/data/vow
+      - ./create-initial-invite.sh:/create-initial-invite.sh:ro
     environment:
       VOW_DID: ${VOW_DID}
       VOW_HOSTNAME: ${VOW_HOSTNAME}
