@@ -36,14 +36,7 @@ type Repo struct {
 	X402PinningEnabled bool `gorm:"default:false"`
 }
 
-// EthereumAddress derives the EIP-55 checksummed Ethereum address from the
-// stored compressed secp256k1 public key. Returns an empty string if no
-// public key has been registered yet.
-//
-// The derivation is: decompress pubkey → keccak256(pubkey[1:]) → take last 20 bytes.
-// This is the same address the user's Ethereum wallet (Rabby, MetaMask, etc.)
-// will present, so it can be passed as the "from" field in EIP-3009 payment
-// authorisations without any separate storage.
+// EthereumAddress returns the Ethereum address for PublicKey.
 func (r *Repo) EthereumAddress() string {
 	if len(r.PublicKey) == 0 {
 		return ""
@@ -100,15 +93,11 @@ type PendingWrite struct {
 	ID          string `gorm:"primaryKey"`
 	Did         string `gorm:"index"`
 	PayloadHash string
-	// Payload is the canonical bytes that the client must sign.
+	// Bytes to sign.
 	Payload []byte
-	// Data holds the original serialised write request so it can be replayed
-	// after signature verification.
+	// Original request.
 	Data []byte
-	// CommitData holds a JSON-serialised pendingCommitState that contains
-	// everything needed to finalise the commit once the signature arrives:
-	// the unsigned commit CBOR, MST diff blocks, record entries, firehose ops,
-	// and per-op results. It is nil for PLC-operation pending writes.
+	// Serialized commit state.
 	CommitData []byte
 	CreatedAt  time.Time
 	ExpiresAt  time.Time `gorm:"index"`

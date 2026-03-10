@@ -44,9 +44,9 @@ const (
 
 	DpopNonceMaxAge = 3 * time.Minute
 
-	ConfidentialClientSessionLifetime = 2 * 365 * 24 * time.Hour // 2 years
-	ConfidentialClientRefreshLifetime = 3 * 30 * 24 * time.Hour  // 3 months
+	ConfidentialClientSessionLifetime = 2 * 365 * 24 * time.Hour // 2y
+	ConfidentialClientRefreshLifetime = 3 * 30 * 24 * time.Hour  // 3mo
 
-	PublicClientSessionLifetime = 2 * 7 * 24 * time.Hour // 2 weeks
+	PublicClientSessionLifetime = 2 * 7 * 24 * time.Hour // 2w
 	PublicClientRefreshLifetime = PublicClientSessionLifetime
 )

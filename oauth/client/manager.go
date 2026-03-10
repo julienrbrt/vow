@@ -18,7 +18,7 @@ import (
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
-// supportedScopes lists the OAuth scopes this server accepts.
+// supportedScopes lists accepted OAuth scopes.
 var supportedScopes = []string{"atproto", "transition:generic", "transition:chat.bsky"}
 
 type Manager struct {
@@ -165,9 +165,7 @@ func (cm *Manager) getClientJwks(ctx context.Context, clientId, jwksUri string) 
 	return jwks, nil
 }
 
-// selectKey picks the best signing key from a raw JWKS key list.
-// It prefers a key whose "kid" matches the hint (if non-empty), then any key
-// with "use"="sig", and finally falls back to the first key in the set.
+// selectKey picks a signing key from a JWKS list.
 func selectKey(keys []any, kidHint string) (jwk.Key, error) {
 	if len(keys) == 0 {
 		return nil, errors.New("empty jwks")
@@ -303,7 +301,6 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 		case "implicit":
 			return nil, errors.New("grant type `implicit` is not allowed")
 		case "authorization_code", "refresh_token":
-			// supported
 		default:
 			return nil, fmt.Errorf("grant type `%s` is not supported", gt)
 		}

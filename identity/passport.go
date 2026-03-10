@@ -8,7 +8,7 @@ import (
 
 type contextKey string
 
-// SkipCacheKey is the context key used to bypass the passport cache.
+// SkipCacheKey bypasses the passport cache.
 const SkipCacheKey contextKey = "skip-cache"
 
 type BackingCache interface {

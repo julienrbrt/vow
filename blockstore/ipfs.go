@@ -15,14 +15,7 @@ import (
 	"github.com/ipfs/go-cid"
 )
 
-// IPFSBlockstore stores and retrieves blocks via a Kubo (go-ipfs) node using
-// its HTTP RPC API. It implements the boxo blockstore.Blockstore interface so
-// it can be used as a drop-in replacement for the SQLite-backed store.
-//
-// Blocks are written to IPFS via /api/v0/block/put and read back via
-// /api/v0/block/get. A local in-memory cache of pending writes is kept so
-// that blocks are immediately readable within the same commit cycle before
-// the IPFS node has finished processing them.
+// IPFSBlockstore stores blocks through Kubo.
 type IPFSBlockstore struct {
 	nodeURL string
 	did     string
@@ -33,7 +26,7 @@ type IPFSBlockstore struct {
 	inserts map[cid.Cid]blocks.Block
 }
 
-// NewIPFS creates a new IPFSBlockstore that talks to the Kubo node at nodeURL.
+// NewIPFS creates a blockstore.
 func NewIPFS(did string, nodeURL string, cli *http.Client) *IPFSBlockstore {
 	if nodeURL == "" {
 		nodeURL = "http://127.0.0.1:5001"
@@ -49,14 +42,12 @@ func NewIPFS(did string, nodeURL string, cli *http.Client) *IPFSBlockstore {
 	}
 }
 
-// SetRev sets the revision string. This satisfies the revSetter interface used
-// by commitRepo so that the blockstore is compatible with the repo commit flow.
+// SetRev stores the revision.
 func (bs *IPFSBlockstore) SetRev(rev string) {
 	bs.rev = rev
 }
 
-// Get retrieves a block by CID. It first checks the local write cache and
-// falls back to the IPFS node.
+// Get returns a block by CID.
 func (bs *IPFSBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) {
 	bs.mu.RLock()
 	if blk, ok := bs.inserts[c]; ok {
@@ -96,7 +87,7 @@ func (bs *IPFSBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, err
 	return blk, nil
 }
 
-// Put writes a single block to the IPFS node and caches it locally.
+// Put stores one block.
 func (bs *IPFSBlockstore) Put(ctx context.Context, block blocks.Block) error {
 	bs.mu.Lock()
 	bs.inserts[block.Cid()] = block
@@ -109,7 +100,7 @@ func (bs *IPFSBlockstore) Put(ctx context.Context, block blocks.Block) error {
 	return nil
 }
 
-// PutMany writes multiple blocks to the IPFS node in sequence.
+// PutMany stores multiple blocks.
 func (bs *IPFSBlockstore) PutMany(ctx context.Context, blks []blocks.Block) error {
 	for _, blk := range blks {
 		bs.mu.Lock()
@@ -124,8 +115,7 @@ func (bs *IPFSBlockstore) PutMany(ctx context.Context, blks []blocks.Block) erro
 }
 
 func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error {
-	// Use /api/v0/block/put with the correct codec and hash so the IPFS node
-	// stores the block under the exact same CID we computed locally.
+	// Keep the same CID.
 	pref := blk.Cid().Prefix()
 
 	codecName, err := codecToName(pref.Codec)
@@ -175,7 +165,7 @@ func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error
 		return fmt.Errorf("ipfs block/put returned %d: %s", resp.StatusCode, string(msg))
 	}
 
-	// Verify the CID returned by the node matches what we expect.
+	// Verify the returned CID.
 	var result struct {
 		Key  string `json:"Key"`
 		Size int    `json:"Size"`
@@ -196,7 +186,7 @@ func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error
 	return nil
 }
 
-// Has checks the local cache first, then asks the IPFS node.
+// Has reports whether a block exists.
 func (bs *IPFSBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
 	bs.mu.RLock()
 	if _, ok := bs.inserts[c]; ok {
@@ -221,7 +211,7 @@ func (bs *IPFSBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
 	return resp.StatusCode == http.StatusOK, nil
 }
 
-// GetSize returns the size of the block data.
+// GetSize returns the size.
 func (bs *IPFSBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
 	blk, err := bs.Get(ctx, c)
 	if err != nil {
@@ -230,14 +220,13 @@ func (bs *IPFSBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
 	return len(blk.RawData()), nil
 }
 
-// DeleteBlock is a no-op for IPFS; blocks are garbage-collected by the node.
+// DeleteBlock removes a block from the cache and unpins it.
 func (bs *IPFSBlockstore) DeleteBlock(ctx context.Context, c cid.Cid) error {
 	bs.mu.Lock()
 	delete(bs.inserts, c)
 	bs.mu.Unlock()
 
-	// Attempt to unpin; ignore errors since the block may not be pinned
-	// individually (it could be part of a DAG pin).
+	// Ignore unpin errors.
 	endpoint := fmt.Sprintf("%s/api/v0/pin/rm?arg=%s", bs.nodeURL, c.String())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
@@ -253,7 +242,7 @@ func (bs *IPFSBlockstore) DeleteBlock(ctx context.Context, c cid.Cid) error {
 	return nil
 }
 
-// AllKeysChan is not supported on the IPFS blockstore.
+// AllKeysChan is unsupported.
 func (bs *IPFSBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, error) {
 	return nil, fmt.Errorf("iteration not supported on IPFS blockstore")
 }
@@ -261,8 +250,7 @@ func (bs *IPFSBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, erro
 // HashOnRead is a no-op.
 func (bs *IPFSBlockstore) HashOnRead(bool) {}
 
-// GetWriteLog returns the blocks written during this session, matching the
-// interface used by RecordingBlockstore for firehose event construction.
+// GetWriteLog returns written blocks.
 func (bs *IPFSBlockstore) GetWriteLog() map[cid.Cid]blocks.Block {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
@@ -272,8 +260,7 @@ func (bs *IPFSBlockstore) GetWriteLog() map[cid.Cid]blocks.Block {
 	return out
 }
 
-// codecToName converts a CID codec number to the string name expected by the
-// Kubo /api/v0/block/put endpoint.
+// codecToName converts a CID codec to a Kubo name.
 func codecToName(codec uint64) (string, error) {
 	switch codec {
 	case cid.DagCBOR:
@@ -289,7 +276,7 @@ func codecToName(codec uint64) (string, error) {
 	}
 }
 
-// mhtypeToName converts a multihash type code to its string name.
+// mhtypeToName converts a multihash type to its name.
 func mhtypeToName(mhtype uint64) (string, error) {
 	switch mhtype {
 	case 0x12: // sha2-256

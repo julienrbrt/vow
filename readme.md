@@ -3,15 +3,15 @@
 > [!WARNING]
 > This is highly experimental software. Use with caution, especially during account migration.
 
-Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
+Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
 ## Features
 
-- ✅ **IPFS storage** — all repo blocks and blobs stored on a co-located Kubo node, indexed in SQLite by DID and CID.
-- ✅ **Keyless PDS** — the server never holds a private key. Every write is signed by the user's own secp256k1 key, held exclusively in their Ethereum wallet (Rabby, MetaMask, etc.).
-- ✅ **Browser-based signer** — the PDS account page connects to the server over WebSocket and signs commits directly via the user's Ethereum wallet. No browser extension needed — just keep the tab open. Standard ATProto clients are completely unaware of this.
-- ✅ **User-sovereign DID** — at key registration the PDS transfers the `did:plc` rotation key to the user's wallet. After that, only the user can modify their identity — the PDS can never hijack it, and migration to another PDS requires no permission.
-- 🔜 **x402 payments for IPFS storage** — blob uploads gated behind on-chain payments via the [x402 protocol](https://x402.org), using the same Ethereum wallet.
+- ✅ **IPFS storage** — repo blocks and blobs are stored on a local Kubo node and indexed in SQLite by DID and CID.
+- ✅ **Keyless PDS** — the server never stores a private key. Every write is signed by the user's secp256k1 key in their Ethereum wallet (Rabby, MetaMask, etc.).
+- ✅ **Browser signer** — the account page connects over WebSocket and signs commits with the user's Ethereum wallet. No browser extension is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
+- ✅ **User-controlled DID** — when the user registers a key, the PDS transfers the `did:plc` rotation key to the user's wallet. After that, only the user can change their identity.
+- 🔜 **x402 payments for IPFS storage** — blob uploads will be gated by on-chain payments via the [x402 protocol](https://x402.org), using the same Ethereum wallet.
 
 ## Quick Start with Docker Compose
 
@@ -58,8 +58,8 @@ Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
    ```
 
    This starts three services:
-   - **ipfs** — a Kubo node storing all repo blocks and blobs
-   - **vow** — the PDS, wired to the Kubo node automatically
+   - **ipfs** — a Kubo node for repo blocks and blobs
+   - **vow** — the PDS
    - **create-invite** — creates an initial invite code on first run
 
 5. **Get your invite code**
@@ -83,36 +83,36 @@ Vow is a PDS (Personal Data Server) implementation in Go for the AT Protocol.
 
 ### What Gets Set Up
 
-- **init-keys**: Generates cryptographic keys (rotation key and JWK) on first run
-- **ipfs**: A Kubo IPFS node storing all content. The RPC API (port 5001) is internal only; the gateway (port 8080) is published on `127.0.0.1:8081` for your reverse proxy.
-- **vow**: The main PDS service running on port 8080
+- **init-keys**: Generates the rotation key and JWK on first run
+- **ipfs**: A Kubo node for repo blocks and blobs. The RPC API (port 5001) stays internal; the gateway (port 8080) is exposed on `127.0.0.1:8081` for your reverse proxy.
+- **vow**: The main PDS service on port 8080
 - **create-invite**: Creates an initial invite code on first run
 
 ### Data Persistence
 
-- `./keys/` — Cryptographic keys (generated automatically)
+- `./keys/` — generated keys
   - `rotation.key` — PDS rotation key
   - `jwk.key` — JWK private key
-  - `initial-invite-code.txt` — Your first invite code (first run only)
-- `./data/` — SQLite database (metadata only)
-- `ipfs_data` Docker volume — all IPFS blocks and blobs
+  - `initial-invite-code.txt` — first invite code (first run only)
+- `./data/` — SQLite metadata database
+- `ipfs_data` Docker volume — IPFS blocks and blobs
 
 ### Reverse Proxy
 
-You will need a reverse proxy (nginx, Caddy, etc.) in front of both services:
+You need a reverse proxy (nginx, Caddy, etc.) in front of both services:
 
 | Service | Internal address | Purpose                       |
 | ------- | ---------------- | ----------------------------- |
 | vow     | `127.0.0.1:8080` | AT Protocol PDS               |
 | ipfs    | `127.0.0.1:8081` | IPFS gateway for blob serving |
 
-Set `VOW_IPFS_GATEWAY_URL` to your public-facing gateway URL so that `sync.getBlob` redirects clients to the gateway directly instead of proxying through vow.
+Set `VOW_IPFS_GATEWAY_URL` to your public gateway URL so `sync.getBlob` redirects clients there instead of proxying through vow.
 
 ## Configuration
 
 ### Database
 
-Vow uses SQLite for relational metadata (accounts, sessions, records index, tokens, etc.). No additional setup is required.
+Vow uses SQLite for relational metadata such as accounts, sessions, record indexes, and tokens. No extra setup is required.
 
 ```bash
 VOW_DB_NAME="/data/vow/vow.db"
@@ -120,7 +120,7 @@ VOW_DB_NAME="/data/vow/vow.db"
 
 ### IPFS Node
 
-The co-located Kubo node is configured automatically in Docker Compose via the internal service hostname `ipfs`. For bare-metal deployments, point vow at your local node:
+In Docker Compose, the local Kubo node is configured automatically through the internal hostname `ipfs`. For bare-metal deployments, point vow at your local node:
 
 ```bash
 # URL of the Kubo RPC API
@@ -131,7 +131,7 @@ VOW_IPFS_NODE_URL="http://127.0.0.1:5001"
 VOW_IPFS_GATEWAY_URL="https://ipfs.example.com"
 ```
 
-`VOW_IPFS_NODE_URL` is the only required IPFS setting. The co-located Kubo node is the sole storage backend — remote pinning will be wired in later via x402 payments.
+`VOW_IPFS_NODE_URL` is the only required IPFS setting. The local Kubo node is the only storage backend for now; remote pinning will come later through x402 payments.
 
 ### SMTP Email
 
@@ -146,11 +146,11 @@ VOW_SMTP_NAME="Vow PDS"
 
 ### BYOK (Bring Your Own Key)
 
-The PDS **never stores or touches a private key**. Every write operation — whether it originates from the Bluesky app, Tangled, or any other standard ATProto client — is held open by the PDS until the user's Ethereum wallet provides a signature, delivered via the browser-based signer running on the account page.
+The PDS **never stores or uses a private key**. Every write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's Ethereum wallet returns a signature through the browser signer on the account page.
 
 #### End-to-end signing flow
 
-This flow is entirely transparent to standard ATProto clients. The PDS holds the inbound HTTP request open while it waits for the signature, then responds normally.
+Standard ATProto clients do not need to know about this flow. The PDS keeps the HTTP request open while it waits for the signature, then responds normally.
 
 ```
 ATProto client          PDS (vow)                  Account page (browser)   Ethereum wallet
@@ -169,32 +169,32 @@ ATProto client          PDS (vow)                  Account page (browser)   Ethe
 
 **What requires a wallet signature:**
 
-Only operations that modify the user's repo or identity require a round-trip to the wallet:
+Only operations that change the user's repo or identity need a wallet signature:
 
 - **Repo writes** — `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`
 - **Identity operations** — PLC operations, handle updates
 - **x402 payments** — EIP-712 payment authorisations for gated pinning
 
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. The PDS proxies these to the AppView using cached service-auth JWTs — see [Service auth caching](#service-auth-caching) below.
+Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. The PDS proxies them to the AppView using cached service-auth JWTs — see [Service auth caching](#service-auth-caching) below.
 
 #### Service auth caching
 
-In standard ATProto the PDS signs service-auth JWTs transparently because it holds the signing key. In Vow the signing key lives in the user's wallet, so naively every proxied request (feed loads, profile views, notifications…) would trigger a wallet prompt — making the PDS unusable for browsing.
+In standard ATProto, the PDS signs service-auth JWTs itself because it holds the signing key. In Vow, the signing key is in the user's wallet, so without caching, every proxied request (feeds, profiles, notifications, and so on) would trigger a wallet prompt.
 
-Vow solves this by **caching service-auth JWTs**. When the proxy needs a token for a given `(aud, lxm)` pair, it first checks an in-memory cache. Only on a cache miss does it send a signing request to the wallet. Cached tokens have a 30-minute lifetime with a 15-second reuse margin, so in practice the wallet is prompted at most **once every ~30 minutes per remote service endpoint** rather than on every request.
+Vow solves this by **caching service-auth JWTs**. When the proxy needs a token for an `(aud, lxm)` pair, it checks an in-memory cache first. Only a cache miss triggers a wallet signing request. Cached tokens live for 30 minutes with a 15-second reuse margin, so in practice the wallet is prompted at most **once every ~30 minutes per remote service endpoint** instead of on every request.
 
 Tokens requested explicitly via `com.atproto.server.getServiceAuth` (where the caller controls the expiry) bypass the cache and always go to the wallet.
 
 #### WebSocket connection
 
-The account page connects using the session cookie (set at sign-in):
+The account page connects with the session cookie set at sign-in:
 
 ```
 GET /account/signer
 Cookie: <session-cookie>
 ```
 
-The connection is upgraded to a WebSocket and kept alive with standard ping/pong. Only one active connection per DID is supported; a new connection replaces the previous one. The connection persists as long as the tab is open and reconnects automatically with exponential back-off if interrupted.
+The connection is upgraded to a WebSocket and kept alive with ping/pong. Only one active connection per DID is supported; a new connection replaces the old one. The connection stays open while the tab is open and reconnects automatically with exponential backoff if interrupted.
 
 A legacy Bearer-token endpoint is also available for programmatic clients:
 
@@ -239,25 +239,25 @@ Authorization: Bearer <access-token>
 
 ### Browser-Based Signer
 
-The signer runs entirely within the PDS account page — no browser extension or additional software is needed. The user keeps the account page open (a pinned tab works well) and all signing happens automatically.
+The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically.
 
 ## Identity & DID Sovereignty
 
-Vow uses `did:plc` for full ATProto federation compatibility — AppViews, relays, and other PDSes resolve DIDs through `plc.directory` without any custom logic. The key difference from a standard PDS is **who controls the rotation key**.
+Vow uses `did:plc` for full ATProto federation compatibility. AppViews, relays, and other PDSes can resolve DIDs through `plc.directory` without custom logic. The main difference from a standard PDS is **who controls the rotation key**.
 
 ### The problem with standard ATProto
 
-In a typical PDS, the server holds the `did:plc` rotation key. This means the PDS operator can unilaterally modify the user's DID document — rotating signing keys, changing service endpoints, or effectively hijacking the identity. The user must trust the operator not to do this.
+In a typical PDS, the server holds the `did:plc` rotation key. That means the operator can change the user's DID document, rotate signing keys, change service endpoints, or effectively hijack the identity. The user has to trust the operator not to do that.
 
 ### Vow's approach: trust-then-transfer
 
 Vow uses a two-phase model:
 
-**Phase 1 — Account creation (trust the PDS).** The user is signing up on a PDS they chose, so they implicitly trust it at this moment. `createAccount` works like standard ATProto: the PDS creates the `did:plc` with its own rotation key.
+**Phase 1 — Account creation.** `createAccount` works like standard ATProto: the PDS creates the `did:plc` with its own rotation key.
 
-**Phase 2 — Key registration (sovereignty transfer).** When the user completes onboarding and calls `supplySigningKey`, the PDS submits a single PLC operation that sets the user's wallet key as both the signing key and the **sole rotation key**, removing the PDS's own key. After this operation the PDS can never modify the DID document again — only the user's Ethereum wallet can authorise future PLC operations.
+**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, the PDS submits one PLC operation that makes the user's wallet key both the signing key and the **only rotation key**, removing the PDS key. After that, only the user's Ethereum wallet can authorise future PLC operations.
 
-### What the user gains
+### What the user gets
 
 | Property                    | Before key registration    | After key registration                            |
 | --------------------------- | -------------------------- | ------------------------------------------------- |
@@ -269,15 +269,15 @@ Vow uses a two-phase model:
 
 ### Verifiability
 
-The transfer is verifiable by anyone. The PLC audit log at `plc.directory` shows the full history of rotation key changes. After `supplySigningKey` completes, the log will show the PDS rotation key being replaced by the user's wallet `did:key`. Any third party can inspect this and confirm the user controls their own identity.
+The transfer is publicly verifiable. The PLC audit log at `plc.directory` shows the full history of rotation key changes. After `supplySigningKey`, the log shows the PDS rotation key being replaced by the user's wallet `did:key`.
 
 ### Why not `did:key` or on-chain?
 
-- **`did:key`** — the DID _is_ the public key, which is elegant but no existing ATProto AppView or relay resolves it. Adopting it would require changes across the entire federation.
-- **On-chain registry** — fully trustless, but forces every PDS implementation to integrate with a blockchain.
-- **`did:web`** — if hosted on the PDS domain, the PDS controls it. If hosted on the user's domain, most users don't have one.
+- **`did:key`** — elegant, but current ATProto AppViews and relays do not resolve it.
+- **On-chain registry** — fully trustless, but every PDS would need blockchain support.
+- **`did:web`** — if hosted on the PDS domain, the PDS controls it. If hosted on the user's domain, most users do not have one.
 
-`did:plc` with rotation key transfer is the pragmatic choice: it works with every existing ATProto implementation today and gives users real sovereignty over their identity.
+`did:plc` with rotation key transfer is the pragmatic choice: it works with existing ATProto implementations today and gives users real control over their identity.
 
 ## Management Commands
 

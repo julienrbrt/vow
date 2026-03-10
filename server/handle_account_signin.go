@@ -101,7 +101,7 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		queryParams = fmt.Sprintf("?%s", req.QueryParams)
 	}
 
-	// TODO: we should make this a helper since we do it for the base create_session as well
+	// TODO: extract this shared lookup into a helper.
 	var repo models.RepoActor
 	var err error
 	switch idtype {

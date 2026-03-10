@@ -20,8 +20,7 @@ import (
 	"pkg.rbrt.fr/vow/models"
 )
 
-// handleAccountSignupGet renders the sign-up form. If the user already has a
-// valid web session they are redirected to the account page instead.
+// handleAccountSignupGet renders the sign-up form.
 func (s *Server) handleAccountSignupGet(w http.ResponseWriter, r *http.Request) {
 	_, sess, err := s.getSessionRepoOrErr(r)
 	if err == nil {
@@ -36,9 +35,7 @@ func (s *Server) handleAccountSignupGet(w http.ResponseWriter, r *http.Request) 
 	s.renderSignupForm(w, r, sess, "", "", "")
 }
 
-// handleAccountSignupPost validates the form input, creates the account (DID,
-// repo, actor), establishes a web session and redirects to /account so the
-// user can register their signing key and connect the signer.
+// handleAccountSignupPost creates an account from the sign-up form.
 func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.With("name", "handleAccountSignupPost")
@@ -65,27 +62,24 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		s.renderSignupForm(w, r, sess, handle, email, inviteCode)
 	}
 
-	// ── Basic validation ─────────────────────────────────────────────────
-
 	if handle == "" || email == "" || password == "" {
 		fail("All fields are required.")
 		return
 	}
 
-	// The handle entered in the form is the local part only (e.g. "alice").
-	// Append the server domain to produce the full handle.
+	// Add the server domain if needed.
 	if !strings.Contains(handle, ".") {
 		handle = handle + "." + s.config.Hostname
 	}
 	handle = strings.ToLower(handle)
 
-	// Validate handle syntax.
+	// Validate the handle.
 	if _, err := syntax.ParseHandle(handle); err != nil {
 		fail("Invalid handle. Use only letters, numbers and hyphens.")
 		return
 	}
 
-	// Validate that the handle's domain suffix matches the server hostname.
+	// Ensure the handle is on this server.
 	if !strings.HasSuffix(handle, "."+s.config.Hostname) && handle != s.config.Hostname {
 		fail("Handle must be under " + s.config.Hostname + ".")
 		return
@@ -95,8 +89,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		fail("Password must be at least 6 characters.")
 		return
 	}
-
-	// ── Invite code ──────────────────────────────────────────────────────
 
 	var ic models.InviteCode
 	if s.config.RequireInvite {
@@ -121,8 +113,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// ── Check handle availability ────────────────────────────────────────
-
 	actor, err := s.getActorByHandle(ctx, handle)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Error("error looking up handle", "error", err)
@@ -139,8 +129,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// ── Check email availability ─────────────────────────────────────────
-
 	existingRepo, err := s.getRepoByEmail(ctx, email)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Error("error looking up email", "error", err)
@@ -151,8 +139,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		fail("That email address is already registered.")
 		return
 	}
-
-	// ── Create DID ───────────────────────────────────────────────────────
 
 	k, err := atcrypto.GeneratePrivateKeyK256()
 	if err != nil {
@@ -173,8 +159,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		fail("Something went wrong. Please try again.")
 		return
 	}
-
-	// ── Create repo + actor rows ─────────────────────────────────────────
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	if err != nil {
@@ -207,8 +191,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		fail("Something went wrong. Please try again.")
 		return
 	}
-
-	// ── Genesis commit ───────────────────────────────────────────────────
 
 	bs := newBlockstoreForRepo(did, s.ipfsConfig)
 
@@ -244,8 +226,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		logger.Error("failed to add identity event", "error", err)
 	}
 
-	// ── Consume invite code ──────────────────────────────────────────────
-
 	if s.config.RequireInvite {
 		if err := s.db.Raw(ctx, "UPDATE invite_codes SET remaining_use_count = remaining_use_count - 1 WHERE code = ?", nil, inviteCode).Scan(&ic).Error; err != nil {
 			logger.Error("error decrementing invite code use count", "error", err)
@@ -260,8 +240,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// ── Send emails ──────────────────────────────────────────────────────
-
 	go func() {
 		if err := s.sendEmailVerification(email, handle, *urepo.EmailVerificationCode); err != nil {
 			logger.Error("error sending email verification", "error", err)
@@ -270,8 +248,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 			logger.Error("error sending welcome email", "error", err)
 		}
 	}()
-
-	// ── Establish web session and redirect ───────────────────────────────
 
 	sess.Options = &sessions.Options{
 		Path:     "/",
@@ -295,9 +271,7 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// renderSignupForm renders the signup.html template with the current form
-// state and any flash messages. It is used by both the GET handler and the
-// POST handler (on validation failure) to avoid duplicating template data.
+// renderSignupForm renders `signup.html`.
 func (s *Server) renderSignupForm(w http.ResponseWriter, r *http.Request, sess *sessions.Session, handle, email, inviteCode string) {
 	if err := s.renderTemplate(w, "signup.html", map[string]any{
 		"Hostname":       s.config.Hostname,

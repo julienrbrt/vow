@@ -11,19 +11,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// handleAccountSigner is the cookie-authenticated equivalent of handleSignerConnect.
-// It upgrades the connection to a WebSocket using the web session cookie for
-// authentication (set by handleAccountSigninPost) instead of requiring a Bearer
-// token. This allows the account page to act as the signer directly — no
-// browser extension needed.
-//
-// The WebSocket protocol is identical to handleSignerConnect: the PDS pushes
-// sign_request / pay_request frames and expects sign_response / sign_reject /
-// pay_response / pay_reject back.
+// handleAccountSigner upgrades an account session to a signer WebSocket.
 func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleAccountSigner")
 
-	// Authenticate via the web session cookie.
+	// Authenticate the session.
 	repo, _, err := s.getSessionRepoOrErr(r)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -31,7 +23,7 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 	}
 	did := repo.Repo.Did
 
-	// Ensure the account has a public key registered.
+	// Require a public key.
 	if len(repo.PublicKey) == 0 {
 		http.Error(w, "no signing key registered for this account", http.StatusBadRequest)
 		return
@@ -46,12 +38,11 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("browser signer connected", "did", did)
 
-	// Register this connection with the hub, evicting any previous connection
-	// for the same DID (e.g. from another tab).
+	// Replace any existing signer connection for this DID.
 	sc := s.signerHub.Register(did)
 	defer s.signerHub.Unregister(did, sc)
 
-	// Configure read deadline + pong handler for keep-alive.
+	// Keep the connection alive.
 	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		logger.Error("signer: failed to set initial read deadline", "did", did, "error", err)
 		return
@@ -63,9 +54,7 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 	pingTicker := time.NewTicker(20 * time.Second)
 	defer pingTicker.Stop()
 
-	// No token expiry check needed — cookie sessions are long-lived and
-	// validated on each HTTP request. The WebSocket stays open as long as the
-	// browser tab is open.
+	// Session validity was checked during upgrade.
 
 	readErr := make(chan error, 1)
 	inbound := make(chan wsIncoming, 4)

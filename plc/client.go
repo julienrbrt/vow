@@ -89,9 +89,7 @@ func (c *Client) CreateDidCredentials(sigkey *atcrypto.PrivateKeyK256, recovery 
 	return c.createDidCredentialsFromPublicKey(pubsigkey, recovery, handle)
 }
 
-// CreateDidCredentialsFromPublicKey builds a DidCredentials struct from an
-// already-parsed public key. This is used on the BYOK path where the PDS only
-// holds the public key and must never touch a private key.
+// CreateDidCredentialsFromPublicKey builds DID credentials from a public key.
 func (c *Client) CreateDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey, recovery string, handle string) (*DidCredentials, error) {
 	return c.createDidCredentialsFromPublicKey(pubsigkey, recovery, handle)
 }
@@ -102,7 +100,7 @@ func (c *Client) createDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey,
 		return nil, err
 	}
 
-	// todo
+	// Put the recovery key first when present.
 	rotationKeys := []string{pubrotkey.DIDKey()}
 	if recovery != "" {
 		rotationKeys = func(recovery string) []string {

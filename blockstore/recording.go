@@ -9,8 +9,7 @@ import (
 	"github.com/ipfs/go-cid"
 )
 
-// RecordingBlockstore wraps a Blockstore and records all reads and writes
-// performed against it, for later inspection.
+// RecordingBlockstore records blockstore reads and writes.
 type RecordingBlockstore struct {
 	base boxoblockstore.Blockstore
 

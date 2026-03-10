@@ -12,8 +12,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
-// This will confirm to the regex in the application if 5 chars are used for each side of the -
-// /^[A-Z2-7]{5}-[A-Z2-7]{5}$/
+// Invite code alphabet.
 var letters = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
