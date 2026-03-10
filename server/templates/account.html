@@ -13,6 +13,11 @@
             class="container base-container authorize-container margin-top-xl"
         >
             <h2>Welcome, {{ .Handle }}</h2>
+            <p style="margin-top: -0.5em; margin-bottom: 0.5em">
+                <small style="opacity: 0.7; font-family: monospace"
+                    >{{ .Did }}</small
+                >
+            </p>
             <ul>
                 <li><a href="/account/signout">Sign Out</a></li>
             </ul>
@@ -119,27 +124,95 @@
             </div>
             {{ end }}
 
-            <!-- OAuth sessions -->
-            <h3>Active Sessions</h3>
-            {{ if eq (len .Tokens) 0 }}
-            <div class="alert alert-success" role="alert">
-                <p class="alert-message">
-                    You do not have any active OAuth sessions.
+            <!-- Active Sessions -->
+            <div class="base-container" style="margin-bottom: 1.5em">
+                <h3>Active Sessions</h3>
+                {{ if eq (len .Tokens) 0 }}
+                <div class="alert alert-success" role="alert">
+                    <p class="alert-message">
+                        You do not have any active OAuth sessions.
+                    </p>
+                </div>
+                {{ else }} {{ range .Tokens }}
+                <div class="base-container" style="margin-bottom: 1em">
+                    <h4>{{ .ClientName }}</h4>
+                    <p>Session Age: {{ .Age }}</p>
+                    <p>Last Updated: {{ .LastUpdated }} ago</p>
+                    <p>Expires In: {{ .ExpiresIn }}</p>
+                    <p>IP Address: {{ .Ip }}</p>
+                    <form action="/account/revoke" method="post">
+                        <input
+                            type="hidden"
+                            name="token"
+                            value="{{ .Token }}"
+                        />
+                        <button type="submit" value="">Revoke</button>
+                    </form>
+                </div>
+                {{ end }} {{ end }}
+            </div>
+
+            <!-- Delete account -->
+            <div class="base-container" style="margin-bottom: 1.5em">
+                <h3>Delete Account</h3>
+                <p>
+                    Permanently delete your account and all associated data.
+                    This cannot be undone.
                 </p>
+
+                <div
+                    id="delete-msg"
+                    style="display: none; margin-bottom: 1em"
+                ></div>
+
+                <!-- Step 1: initial button -->
+                <div id="delete-step-1">
+                    {{ if .HasSigningKey }}
+                    <p>
+                        <small style="opacity: 0.7">
+                            Your wallet (<code>{{ .EthereumAddress }}</code>)
+                            will be asked to sign a confirmation message. No
+                            transaction will be broadcast.
+                        </small>
+                    </p>
+                    <div class="button-row">
+                        <button id="btn-delete-start" class="danger">
+                            Delete my account
+                        </button>
+                    </div>
+                    {{ else }}
+                    <p>
+                        <small style="opacity: 0.7">
+                            Account deletion requires a registered signing key
+                            so your wallet can confirm the request. Please
+                            register your wallet above first.
+                        </small>
+                    </p>
+                    {{ end }}
+                </div>
+
+                <!-- Step 2: confirmation (shown after first click) -->
+                <div id="delete-step-2" style="display: none">
+                    <p><strong>Are you absolutely sure?</strong></p>
+                    <p>
+                        <small style="opacity: 0.7">
+                            Clicking the button below will prompt your wallet to
+                            sign
+                            <code style="word-break: break-all"
+                                >"Delete account: {{ .Did }}"</code
+                            >. The server will verify the signature and
+                            permanently erase all your data. This cannot be
+                            undone.
+                        </small>
+                    </p>
+                    <div class="button-row">
+                        <button id="btn-delete-confirm" class="danger">
+                            Yes, sign and delete my account
+                        </button>
+                        <button id="btn-delete-cancel">Cancel</button>
+                    </div>
+                </div>
             </div>
-            {{ else }} {{ range .Tokens }}
-            <div class="base-container" style="margin-bottom: 1em">
-                <h4>{{ .ClientName }}</h4>
-                <p>Session Age: {{ .Age }}</p>
-                <p>Last Updated: {{ .LastUpdated }} ago</p>
-                <p>Expires In: {{ .ExpiresIn }}</p>
-                <p>IP Address: {{ .Ip }}</p>
-                <form action="/account/revoke" method="post">
-                    <input type="hidden" name="token" value="{{ .Token }}" />
-                    <button type="submit" value="">Revoke</button>
-                </form>
-            </div>
-            {{ end }} {{ end }}
         </main>
 
         <script>
@@ -677,6 +750,100 @@
                 };
             })();
             {{ end }}
+
+            // ---------------------------------------------------------------------------
+            // Account deletion — wallet signature confirmation
+            // ---------------------------------------------------------------------------
+
+            (function () {
+                const step1   = document.getElementById("delete-step-1");
+                const step2   = document.getElementById("delete-step-2");
+                const msgEl   = document.getElementById("delete-msg");
+                const btnStart   = document.getElementById("btn-delete-start");
+                const btnConfirm = document.getElementById("btn-delete-confirm");
+                const btnCancel  = document.getElementById("btn-delete-cancel");
+
+                if (!btnStart) return; // no signing key registered — nothing to wire up
+
+                function showDeleteMsg(text, type) {
+                    msgEl.textContent = text;
+                    msgEl.style.display = "block";
+                    msgEl.className =
+                        "alert " + (type === "error" ? "alert-danger" : "alert-success");
+                }
+
+                function hideDeleteMsg() {
+                    msgEl.style.display = "none";
+                    msgEl.textContent = "";
+                }
+
+                btnStart.addEventListener("click", () => {
+                    hideDeleteMsg();
+                    step1.style.display = "none";
+                    step2.style.display = "block";
+                });
+
+                btnCancel.addEventListener("click", () => {
+                    hideDeleteMsg();
+                    step2.style.display = "none";
+                    step1.style.display = "block";
+                });
+
+                btnConfirm.addEventListener("click", async () => {
+                    hideDeleteMsg();
+
+                    if (!window.ethereum) {
+                        showDeleteMsg(
+                            "No Ethereum wallet detected. Please install MetaMask, Rabby, or another EIP-1193 wallet and reload.",
+                            "error",
+                        );
+                        return;
+                    }
+
+                    btnConfirm.disabled = true;
+                    btnCancel.disabled  = true;
+                    btnConfirm.textContent = "Connecting to wallet…";
+
+                    try {
+                        const accounts = await window.ethereum.request({
+                            method: "eth_requestAccounts",
+                        });
+                        if (!accounts || accounts.length === 0) {
+                            throw new Error("No accounts returned from wallet.");
+                        }
+                        const walletAddress = accounts[0];
+
+                        const did     = {{ .Did | js }};
+                        const message = "Delete account: " + did;
+
+                        btnConfirm.textContent = "Sign the message in your wallet…";
+                        const signature = await window.ethereum.request({
+                            method: "personal_sign",
+                            params: [message, walletAddress],
+                        });
+
+                        btnConfirm.textContent = "Deleting…";
+                        const res = await fetch("/account/delete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ walletAddress, signature }),
+                        });
+
+                        if (!res.ok) {
+                            const body = await res.json().catch(() => ({}));
+                            throw new Error(body.message || body.error || `Deletion failed (${res.status})`);
+                        }
+
+                        showDeleteMsg("Account deleted. Redirecting…", "success");
+                        setTimeout(() => { window.location.href = "/"; }, 1500);
+                    } catch (err) {
+                        showDeleteMsg(err.message || String(err), "error");
+                        btnConfirm.textContent = "Yes, sign and delete my account";
+                        btnConfirm.disabled = false;
+                        btnCancel.disabled  = false;
+                    }
+                });
+            })();
 
             // ---------------------------------------------------------------------------
             // Crypto helpers (used by key registration)
