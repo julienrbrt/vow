@@ -146,7 +146,12 @@ VOW_SMTP_NAME="Vow PDS"
 
 ### BYOK (Bring Your Own Key)
 
-The PDS holds one key — the **rotation key** — used only for lightweight PDS-level operations (service-auth JWTs, genesis DID creation, and PLC operations before the user has registered their wallet). It is never used to sign user content.
+The PDS holds two keys:
+
+- **Rotation key** (`rotation.key`) — a secp256k1 key used for DID genesis operations and for signing the PLC operation that transfers control to the user's wallet during `supplySigningKey`. It is never used to sign user content.
+- **JWK key** (`jwk.key`) — a P-256 ECDSA key used exclusively to sign ATProto session JWTs (access and refresh tokens) and OAuth tokens. It has no role in repo writes or identity operations.
+
+Neither key is ever used to sign repo commits or service-auth JWTs.
 
 Every repo write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's Ethereum wallet returns a signature through the browser signer on the account page.
 
@@ -177,7 +182,7 @@ Only operations that change the user's repo content, or identity operations afte
 - **Identity operations** — PLC operations and handle updates, **once the user's wallet key is the rotation key**. Before that, the PDS rotation key signs them directly.
 - **x402 payments** — EIP-712 payment authorisations for gated pinning
 
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. Service-auth JWTs for proxied requests are signed directly by the PDS rotation key — fast, in-process, no wallet involved.
+Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the wallet. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are also signed by the user's wallet via the signer WebSocket — the wallet tab must be open for these to succeed.
 
 #### WebSocket connection
 
@@ -249,7 +254,7 @@ Vow uses a two-phase model:
 
 **Phase 1 — Account creation.** `createAccount` works like standard ATProto: the PDS creates the `did:plc` with its own rotation key.
 
-**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, the PDS submits one PLC operation that makes the user's wallet key both the signing key and the **only rotation key**, removing the PDS key. After that, only the user's Ethereum wallet can authorise future PLC operations.
+**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, the PDS submits one PLC operation that makes the user's wallet key both the signing key and the **only rotation key**, removing the PDS key from the DID document. After that, only the user's Ethereum wallet can authorise future PLC operations. The PDS rotation key file is not destroyed — it continues to be used for DID genesis when new accounts register — but it no longer has any authority over this user's DID document.
 
 ### What the user gets
 
