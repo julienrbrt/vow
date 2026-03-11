@@ -2,14 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/golang-jwt/jwt/v4"
 	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -155,81 +153,27 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			repo = maybeRepo
 		}
 
-		// isUserSignedToken is true for service-auth JWTs signed by the user's
-		// passkey (ES256 with an lxm claim). Regular access tokens use ES256
-		// too but are signed by the PDS private key and carry no lxm claim.
-		isUserSignedToken := token.Header["alg"] == "ES256" && hasLxm
+		// All ES256 tokens issued by this PDS — both regular access/refresh
+		// tokens and service-auth tokens (lxm claim) — are signed by the PDS
+		// server key. Service-auth tokens were previously routed through the
+		// passkey WebSocket, but since the atproto_service split-key model was
+		// adopted (see RFC), they are now signed server-side so that background
+		// requests never require passkey usage.
+		token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
+				return nil, fmt.Errorf("unsupported signing method: %v", t.Header["alg"])
+			}
+			return &s.privateKey.PublicKey, nil
+		})
+		if err != nil {
+			logger.Error("error parsing jwt", "error", err)
+			helpers.ExpiredTokenError(w)
+			return
+		}
 
-		if !isUserSignedToken {
-			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
-				if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
-					return nil, fmt.Errorf("unsupported signing method: %v", t.Header["alg"])
-				}
-				return &s.privateKey.PublicKey, nil
-			})
-			if err != nil {
-				logger.Error("error parsing jwt", "error", err)
-				helpers.ExpiredTokenError(w)
-				return
-			}
-
-			if !token.Valid {
-				helpers.InvalidTokenError(w)
-				return
-			}
-		} else {
-			kpts := strings.Split(tokenstr, ".")
-			signingInput := kpts[0] + "." + kpts[1]
-			sigBytes, err := base64.RawURLEncoding.DecodeString(kpts[2])
-			if err != nil {
-				logger.Error("error decoding signature bytes", "error", err)
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			if len(sigBytes) != 64 {
-				logger.Error("incorrect sigbytes length", "length", len(sigBytes))
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			if repo == nil {
-				sub, ok := claims["sub"].(string)
-				if !ok {
-					s.logger.Error("no sub claim in user-signed token and repo not set")
-					helpers.InvalidTokenError(w)
-					return
-				}
-				maybeRepo, err := s.getRepoActorByDid(ctx, sub)
-				if err != nil {
-					s.logger.Error("error fetching repo for user-signed token verification", "error", err)
-					helpers.ServerError(w, nil)
-					return
-				}
-				repo = maybeRepo
-				did = sub
-			}
-
-			// The PDS never holds the user's private key. Verify the JWT
-			// signature using the compressed P-256 public key stored in the DB.
-			if len(repo.PublicKey) == 0 {
-				logger.Error("no public key registered for account", "did", repo.Repo.Did)
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
-			if err != nil {
-				logger.Error("can't parse stored public key", "error", err)
-				helpers.ServerError(w, nil)
-				return
-			}
-
-			if err := pubKey.HashAndVerifyLenient([]byte(signingInput), sigBytes); err != nil {
-				logger.Error("user-signed JWT verification failed", "error", err)
-				helpers.ServerError(w, nil)
-				return
-			}
+		if !token.Valid {
+			helpers.InvalidTokenError(w)
+			return
 		}
 
 		isRefresh := r.URL.Path == "/xrpc/com.atproto.server.refreshSession"

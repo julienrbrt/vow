@@ -4,14 +4,16 @@
 > This is highly experimental software. Use with caution, especially during account migration.
 
 > [!IMPORTANT]
-> **Vow cannot fully interoperate with the ATProto network (Bluesky, AppViews, relays) in its current form.**
+> **Vow implements a two-key model for signing that requires a pending ATProto protocol change to be fully interoperable.**
 >
-> ATProto uses a single DID document key (`verificationMethods.atproto`) for two distinct purposes: signing repo commits _and_ signing service-auth JWTs. A keyless PDS like Vow cannot satisfy both at once:
+> ATProto uses a single DID document key (`verificationMethods.atproto`) for two distinct purposes: signing repo commits _and_ signing service-auth JWTs. Vow splits these into two separate keys:
 >
-> - **Commit signing** works correctly. The user's passkey signs each write; the signature is stored in the commit and broadcast to relays.
-> - **Service-auth JWT signing** is broken. Every proxied request (loading feeds, notifications, any AppView call) requires a fresh JWT signed by `verificationMethods.atproto`. Under the current spec that means a passkey gesture per background request — an unacceptable UX — or the PDS signs with a different key and AppViews reject it with `BadJwtSignature`.
+> - **`verificationMethods.atproto`** → the user's passkey. Signs every repo commit. Requires passkey usage, which is acceptable because commits are user-initiated.
+> - **`verificationMethods.atproto_service`** → the PDS server key. Signs service-auth JWTs for background requests (feed loading, notifications, proxied reads) without ever prompting the passkey.
 >
-> There is no correct workaround within the current ATProto specification. A protocol change is required. A formal RFC proposing an optional `#atproto_service` verification method to separate the two signing responsibilities has been drafted [here](https://tangled.org/strings/did:plc:7kpq3n7brenbgyp2gx36hl6x/3mgqmwxzvlu22). Until that or an equivalent change lands upstream, Vow accounts will experience broken feeds, notifications, and proxied reads on standard ATProto clients.
+> [did-method-plc#101](https://github.com/did-method-plc/did-method-plc/pull/101) (merged June 2025) relaxed PLC directory constraints so DID documents can carry keys under arbitrary fragment names. Vow already writes both keys into the DID document during `supplySigningKey`.
+>
+> **What remains blocked:** AppViews and relays in the reference implementation ([indigo](https://github.com/bluesky-social/indigo)) still call `identity.PublicKey()` → `GetPublicKey("atproto")` when verifying service-auth JWTs, so they will reject tokens signed by the PDS key with `BadJwtSignature`. A spec change adding an `#atproto_service` fallback is required. The RFC is [here](https://github.com/bluesky-social/atproto/discussions/4739). Until it lands in indigo and Bluesky's infrastructure, feeds, notifications, and proxied reads on standard ATProto clients will not work.
 
 Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
@@ -191,7 +193,7 @@ Only operations that change the user's repo content, or identity operations afte
 - **Repo writes** — `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`
 - **Identity operations** — PLC operations and handle updates, **once the user's passkey is the rotation key**. Before that, the PDS rotation key signs them directly.
 
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the passkey. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are also signed by the user's passkey via the signer WebSocket — the signer tab must be open for these to succeed.
+Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the passkey. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are signed by the PDS server key (`#atproto_service`) and require no passkey: the signer tab does not need to be open for these.
 
 #### WebSocket connection
 
@@ -251,7 +253,7 @@ The server decodes all three fields, reconstructs the signed message as `authent
 
 ### Browser-Based Signer
 
-The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically via the platform's passkey prompt (biometric, PIN, or security key).
+The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically when the passkey is used.
 
 ## Identity & DID Sovereignty
 
@@ -271,13 +273,15 @@ Vow uses a two-phase model:
 
 ### What the user gets
 
-| Property                    | Before key registration    | After key registration                            |
-| --------------------------- | -------------------------- | ------------------------------------------------- |
-| Who signs commits           | Nobody (no key registered) | User's passkey                                    |
-| Who controls the DID        | PDS rotation key           | User's passkey-derived key                        |
-| PDS can hijack identity     | Yes                        | **No**                                            |
-| User can migrate to new PDS | No (PDS must cooperate)    | **Yes** (sign a PLC op to update serviceEndpoint) |
-| Federation compatibility    | Full                       | Full (unchanged)                                  |
+| Property                        | Before key registration                                 | After key registration                                                                                                      |
+| ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Who signs commits               | Nobody (no key registered)                              | User's passkey (`#atproto`)                                                                                                 |
+| Who signs service-auth JWTs     | PDS server key                                          | PDS server key (`#atproto_service`)                                                                                         |
+| Who controls the DID            | PDS rotation key                                        | User's passkey-derived key                                                                                                  |
+| PDS can hijack identity         | Yes                                                     | **No**                                                                                                                      |
+| User can migrate to new PDS     | Yes (If rotation key was set) & No (PDS must cooperate) | **Yes** (sign a PLC op to update serviceEndpoint)                                                                           |
+| Commit federation compatibility | Full                                                    | Full (unchanged)                                                                                                            |
+| Service-auth federation compat. | Full                                                    | Partial — requires [`#atproto_service` RFC](https://github.com/bluesky-social/atproto/discussions/4739) to land in AppViews |
 
 ### Verifiability
 
@@ -292,7 +296,7 @@ Passkeys (WebAuthn/FIDO2) solve this:
 - **No browser extension required** — passkeys are built into every modern browser and OS.
 - **Hardware-backed security** — the private key lives in a secure enclave (TPM, Secure Enclave, or a roaming authenticator like a YubiKey). It never leaves the device.
 - **Familiar UX** — users authenticate with a fingerprint, face scan, or PIN instead of confirming a cryptographic message in a wallet popup.
-- **Correct signature format** — the passkey signs with P-256 ECDSA. Commit signatures are stored and broadcast in the raw (r‖s) format ATProto expects. Service-auth JWT signatures, however, cannot be produced in a standards-compatible way by a passkey without a protocol-level change (see the limitation notice at the top of this document).
+- **Correct signature format** — the passkey signs repo commits with P-256 ECDSA in the raw (r‖s) format ATProto expects. Service-auth JWTs are signed by the PDS server key (`#atproto_service`) so they are standard ES256 and require no passkey. See the limitation notice at the top of this document for the remaining interoperability gap.
 
 ## Management Commands
 

@@ -72,9 +72,14 @@ func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid 
 			Service:            services,
 		})
 
-		key, err := parsedIdentity.PublicKey()
+		// Prefer the dedicated service-auth key (atproto_service) when present.
+		// ref: https://github.com/bluesky-social/atproto/discussions/4739
+		key, err := parsedIdentity.GetPublicKey("atproto_service")
 		if err != nil {
-			return nil, fmt.Errorf("signing key not found for did %s: %s", did, err)
+			key, err = parsedIdentity.PublicKey() // fallback to #atproto
+			if err != nil {
+				return nil, fmt.Errorf("signing key not found for did %s: %s", did, err)
+			}
 		}
 		return key, nil
 	})

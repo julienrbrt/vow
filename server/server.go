@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
@@ -63,16 +64,20 @@ type IPFSConfig struct {
 }
 
 type Server struct {
-	http          *http.Client
-	httpd         *http.Server
-	mail          *mailyak.MailYak
-	mailLk        *sync.Mutex
-	router        *chi.Mux
-	db            *db.DB
-	plcClient     *plc.Client
-	logger        *slog.Logger
-	config        *config
-	privateKey    *ecdsa.PrivateKey
+	http       *http.Client
+	httpd      *http.Server
+	mail       *mailyak.MailYak
+	mailLk     *sync.Mutex
+	router     *chi.Mux
+	db         *db.DB
+	plcClient  *plc.Client
+	logger     *slog.Logger
+	config     *config
+	privateKey *ecdsa.PrivateKey
+	// privateKeyATP is the same JWK key wrapped as an atcrypto.PrivateKeyP256
+	// so it can be passed directly to atcrypto signing functions. Used to sign
+	// service-auth JWTs on behalf of the user (atproto_service slot in DID doc).
+	privateKeyATP *atcrypto.PrivateKeyP256
 	repoman       *RepoMan
 	oauthProvider *provider.Provider
 	evtman        *events.EventManager
@@ -377,16 +382,26 @@ func New(args *Args) (*Server, error) {
 
 	cookieStore := sessions.NewCookieStore([]byte(args.SessionSecret))
 
+	// Wrap the JWK private key as an atcrypto.PrivateKeyP256 for ATProto-compatible
+	// signing. atcrypto.ParsePrivateBytesP256 expects the raw 32-byte D scalar.
+	dBytes := make([]byte, 32)
+	pkey.D.FillBytes(dBytes)
+	atpKey, err := atcrypto.ParsePrivateBytesP256(dBytes)
+	if err != nil {
+		return nil, fmt.Errorf("wrapping JWK private key for atcrypto: %w", err)
+	}
+
 	s := &Server{
-		http:       h,
-		httpd:      httpd,
-		router:     r,
-		logger:     args.Logger,
-		db:         dbw,
-		plcClient:  plcClient,
-		privateKey: &pkey,
-		sessions:   cookieStore,
-		validator:  vdtor,
+		http:          h,
+		httpd:         httpd,
+		router:        r,
+		logger:        args.Logger,
+		db:            dbw,
+		plcClient:     plcClient,
+		privateKey:    &pkey,
+		privateKeyATP: atpKey,
+		sessions:      cookieStore,
+		validator:     vdtor,
 		config: &config{
 			Version:          args.Version,
 			Did:              args.Did,

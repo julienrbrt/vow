@@ -30,16 +30,33 @@ type SupplySigningKeyRequest struct {
 
 type SupplySigningKeyResponse struct {
 	Did          string `json:"did"`
-	PublicKey    string `json:"publicKey"`    // did:key representation
-	CredentialID string `json:"credentialId"` // base64url
+	PublicKey    string `json:"publicKey"`    // did:key for atproto (commit signing, passkey)
+	ServiceKey   string `json:"serviceKey"`   // did:key for atproto_service (service-auth, PDS server key)
+	CredentialID string `json:"credentialId"` // base64url credential ID
 }
 
 // handleSupplySigningKey registers a WebAuthn passkey for the authenticated
 // account. The private key never leaves the authenticator; the PDS stores only
 // the compressed P-256 public key and the credential ID.
 //
-// On success, the account's PLC DID document is updated so that the passkey's
-// did:key becomes the active atproto verification method and rotation key.
+// On success the account's PLC DID document is updated with two changes:
+//
+//  1. verificationMethods["atproto"] = passkey did:key
+//     The passkey becomes the commit-signing key. Every repo write requires a
+//     user-presence gesture from this point on.
+//
+//  2. verificationMethods["atproto_service"] = PDS server did:key
+//     The PDS server key is registered for service-auth JWT signing. This lets
+//     the PDS issue service-auth tokens for background requests (feed loading,
+//     notifications, proxied reads) without prompting the passkey each time.
+//     AppViews that implement the atproto_service fallback (per the RFC at
+//     https://tangled.org/strings/did:plc:7kpq3n7brenbgyp2gx36hl6x/3mgqmwxzvlu22)
+//     will accept these tokens. Older verifiers fall back to #atproto and will
+//     reject them — that is the known limitation until the spec change lands.
+//
+//  3. rotationKeys = [passkey did:key]
+//     The PDS rotation key is removed. Only the user's passkey can authorise
+//     future PLC operations.
 func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.With("name", "handleSupplySigningKey")
@@ -82,8 +99,15 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 
 	pubDIDKey := pubKey.DIDKey()
 
-	// Update the PLC DID document so the passkey's did:key becomes the active
-	// atproto verification method and the sole rotation key.
+	// Derive the PDS server did:key for the atproto_service slot.
+	pdsDIDKey, err := s.pdsDIDKey()
+	if err != nil {
+		logger.Error("error deriving PDS did:key", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+
+	// Update the PLC DID document with the two-key structure.
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 		if err != nil {
@@ -96,7 +120,14 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 
 		newVerificationMethods := make(map[string]string)
 		maps.Copy(newVerificationMethods, latest.Operation.VerificationMethods)
+		// Commit-signing key: the user's passkey. Every repo write requires
+		// passkey usage.
 		newVerificationMethods["atproto"] = pubDIDKey
+		// Service-auth signing key: the PDS server key. Used for background
+		// infrastructure requests that must not require a passkey.
+		// Verifiers that implement the atproto_service RFC will accept tokens
+		// signed by this key; others fall back to #atproto (known limitation).
+		newVerificationMethods["atproto_service"] = pdsDIDKey
 
 		// Replace the PDS rotation key with the passkey's did:key. After this
 		// operation the PDS can no longer unilaterally modify the DID document
@@ -146,12 +177,14 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 	logger.Info("passkey registered — rotation key transferred to user",
 		"did", repo.Repo.Did,
 		"publicKey", pubDIDKey,
+		"serviceKey", pdsDIDKey,
 		"credentialIDLen", len(credentialID),
 	)
 
 	s.writeJSON(w, 200, SupplySigningKeyResponse{
 		Did:          repo.Repo.Did,
 		PublicKey:    pubDIDKey,
+		ServiceKey:   pdsDIDKey,
 		CredentialID: base64.RawURLEncoding.EncodeToString(credentialID),
 	})
 }

@@ -2,14 +2,12 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -81,11 +79,14 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 }
 
 // signServiceAuthJWT returns a signed ES256 service-auth JWT for the given
-// (aud, lxm) pair. It sends a signing request to the user's passkey via the
-// SignerHub WebSocket and waits for the verified raw (r‖s) signature.
+// (aud, lxm) pair.
 //
-// The returned string is a fully formed "header.payload.signature" JWT ready to
-// be placed in an Authorization: Bearer header.
+// Service-auth JWTs are signed by the PDS server key stored in the atproto_service
+// slot of the user's DID document. This is a standard ES256 signature over
+// SHA-256(header.payload), which external AppViews and relays can verify without
+// any passkey interaction. The passkey (atproto slot) is reserved for repo commit
+// signing only — operations that are user-initiated and can tolerate passkey usage.
+// Background infrastructure requests like feed loading must not require one.
 //
 // lxm may be empty, in which case no "lxm" claim is included.
 func (s *Server) signServiceAuthJWT(
@@ -95,34 +96,15 @@ func (s *Server) signServiceAuthJWT(
 	lxm string,
 	exp int64,
 ) (string, error) {
-	if len(repo.PublicKey) == 0 {
-		return "", fmt.Errorf("no public key registered for account %s", repo.Repo.Did)
-	}
 
 	did := repo.Repo.Did
 
-	// ── Build header + payload ────────────────────────────────────────────
-	header := map[string]string{
-		"alg": "ES256",
-		"crv": "P-256",
-		"typ": "JWT",
-	}
-	hj, err := json.Marshal(header)
-	if err != nil {
-		return "", fmt.Errorf("marshaling JWT header: %w", err)
-	}
-	encHeader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
-
 	now := time.Now().Unix()
-	var expiresAt time.Time
 	if exp == 0 {
-		expiresAt = time.Now().Add(5 * time.Minute)
-		exp = expiresAt.Unix()
-	} else {
-		expiresAt = time.Unix(exp, 0)
+		exp = now + int64(5*time.Minute/time.Second)
 	}
 
-	claims := map[string]any{
+	claims := jwt.MapClaims{
 		"iss": did,
 		"aud": aud,
 		"jti": uuid.NewString(),
@@ -133,60 +115,51 @@ func (s *Server) signServiceAuthJWT(
 		claims["lxm"] = lxm
 	}
 
-	pj, err := json.Marshal(claims)
+	// Register a custom ES256 signing method that delegates to atcrypto so the
+	// signature is always low-S normalised, as the ATProto spec requires.
+	token := jwt.NewWithClaims(newES256AtpSigningMethod(), claims)
+	return token.SignedString(s.privateKeyATP)
+}
+
+// es256AtpSigningMethod is a jwt.SigningMethod that uses atcrypto.PrivateKeyP256
+// to produce low-S normalised ES256 signatures, satisfying the ATProto spec.
+type es256AtpSigningMethod struct{}
+
+func newES256AtpSigningMethod() *es256AtpSigningMethod { return &es256AtpSigningMethod{} }
+
+func (m *es256AtpSigningMethod) Alg() string { return "ES256" }
+
+func (m *es256AtpSigningMethod) Sign(signingString string, key any) (string, error) {
+	priv, ok := key.(*atcrypto.PrivateKeyP256)
+	if !ok {
+		return "", fmt.Errorf("es256AtpSigningMethod: expected *atcrypto.PrivateKeyP256, got %T", key)
+	}
+	sig, err := priv.HashAndSign([]byte(signingString))
 	if err != nil {
-		return "", fmt.Errorf("marshaling JWT payload: %w", err)
+		return "", fmt.Errorf("es256AtpSigningMethod: signing failed: %w", err)
 	}
-	encPayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
+	return jwt.EncodeSegment(sig), nil //nolint:staticcheck
+}
 
-	// signingInput is what the JWT spec calls the "message to be signed":
-	// base64url(header) + "." + base64url(payload).
-	signingInput := encHeader + "." + encPayload
-
-	// ES256 requires signing the SHA-256 hash of the signing input. We send
-	// the hash as the WebAuthn challenge (the passkey will sign
-	// authenticatorData ‖ SHA-256(clientDataJSON) where clientDataJSON.challenge
-	// = base64url(hash)). The WS handler verifies the full assertion and
-	// delivers the raw (r‖s) signature bytes back to this function.
-	hash := sha256.Sum256([]byte(signingInput))
-	payloadB64 := base64.RawURLEncoding.EncodeToString(hash[:])
-
-	requestID := uuid.NewString()
-	signerDeadline := time.Now().Add(signerRequestTimeout)
-
-	ops := []PendingWriteOp{
-		{
-			Type:       "service_auth",
-			Collection: aud,
-			Rkey:       lxm,
-		},
-	}
-
-	msgBytes, err := buildSignRequestMsg(requestID, did, payloadB64, ops, signerDeadline)
+func (m *es256AtpSigningMethod) Verify(signingString string, signature string, key any) error {
+	sigBytes, err := jwt.DecodeSegment(signature) //nolint:staticcheck
 	if err != nil {
-		return "", fmt.Errorf("building sign request message: %w", err)
+		return err
 	}
+	pub, ok := key.(atcrypto.PublicKey)
+	if !ok {
+		return fmt.Errorf("es256AtpSigningMethod: expected atcrypto.PublicKey, got %T", key)
+	}
+	return pub.HashAndVerifyLenient([]byte(signingString), sigBytes)
+}
 
-	signCtx, cancel := context.WithDeadline(ctx, signerDeadline)
-	defer cancel()
-
-	sigBytes, err := s.signerHub.RequestSignature(signCtx, did, requestID, msgBytes)
+// pdsDIDKey returns the PDS server's P-256 public key encoded as a did:key
+// string. This is what gets written into verificationMethods["atproto_service"]
+// of the user's DID document during supplySigningKey.
+func (s *Server) pdsDIDKey() (string, error) {
+	pub, err := s.privateKeyATP.PublicKey()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("getting PDS public key: %w", err)
 	}
-
-	// sigBytes is the raw 64-byte (r‖s) P-256 signature delivered by the WS
-	// handler after WebAuthn assertion verification. Trim to 64 bytes just in
-	// case an old client appended a recovery byte.
-	if len(sigBytes) == 65 {
-		sigBytes = sigBytes[:64]
-	}
-	if len(sigBytes) != 64 {
-		return "", fmt.Errorf("unexpected signature length %d (want 64)", len(sigBytes))
-	}
-
-	encSig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(sigBytes), "=")
-	token := signingInput + "." + encSig
-
-	return token, nil
+	return pub.DIDKey(), nil
 }
