@@ -336,18 +336,6 @@ func New(args *Args) (*Server, error) {
 		return nil, err
 	}
 
-	h := util.RobustHTTPClient()
-
-	plcClient, err := plc.NewClient(&plc.ClientArgs{
-		H:           h,
-		Service:     "https://plc.directory",
-		PdsHostname: args.Hostname,
-		RotationKey: rkbytes,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	jwkbytes, err := os.ReadFile(args.JwkPath)
 	if err != nil {
 		return nil, err
@@ -360,6 +348,30 @@ func New(args *Args) (*Server, error) {
 
 	var pkey ecdsa.PrivateKey
 	if err := key.Raw(&pkey); err != nil {
+		return nil, err
+	}
+
+	// Wrap the JWK private key as an atcrypto.PrivateKeyP256 for ATProto-compatible
+	// signing. Convert via ecdh to get the raw private key bytes.
+	ecdhKey, err := pkey.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("converting private key to ecdh: %w", err)
+	}
+	atpKey, err := atcrypto.ParsePrivateBytesP256(ecdhKey.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("wrapping JWK private key for atcrypto: %w", err)
+	}
+
+	h := util.RobustHTTPClient()
+
+	plcClient, err := plc.NewClient(&plc.ClientArgs{
+		H:              h,
+		Service:        "https://plc.directory",
+		PdsHostname:    args.Hostname,
+		RotationKey:    rkbytes,
+		ServiceAuthKey: atpKey,
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -381,15 +393,6 @@ func New(args *Args) (*Server, error) {
 	}
 
 	cookieStore := sessions.NewCookieStore([]byte(args.SessionSecret))
-
-	// Wrap the JWK private key as an atcrypto.PrivateKeyP256 for ATProto-compatible
-	// signing. atcrypto.ParsePrivateBytesP256 expects the raw 32-byte D scalar.
-	dBytes := make([]byte, 32)
-	pkey.D.FillBytes(dBytes)
-	atpKey, err := atcrypto.ParsePrivateBytesP256(dBytes)
-	if err != nil {
-		return nil, fmt.Errorf("wrapping JWK private key for atcrypto: %w", err)
-	}
 
 	s := &Server{
 		http:          h,

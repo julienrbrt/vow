@@ -2,6 +2,8 @@ module pkg.rbrt.fr/vow
 
 go 1.26.0
 
+replace github.com/bluesky-social/indigo => github.com/julienrbrt/indigo v0.0.0-20260311083708-4ee8c7379cc4
+
 require (
 	github.com/bluesky-social/indigo v0.0.0-20260203235305-a86f3ae1f8ec
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792

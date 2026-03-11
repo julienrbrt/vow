@@ -19,17 +19,19 @@ import (
 )
 
 type Client struct {
-	h           *http.Client
-	service     string
-	pdsHostname string
-	rotationKey *atcrypto.PrivateKeyK256
+	h              *http.Client
+	service        string
+	pdsHostname    string
+	rotationKey    *atcrypto.PrivateKeyK256
+	serviceAuthKey *atcrypto.PrivateKeyP256
 }
 
 type ClientArgs struct {
-	H           *http.Client
-	Service     string
-	RotationKey []byte
-	PdsHostname string
+	H              *http.Client
+	Service        string
+	RotationKey    []byte
+	PdsHostname    string
+	ServiceAuthKey *atcrypto.PrivateKeyP256
 }
 
 func NewClient(args *ClientArgs) (*Client, error) {
@@ -47,10 +49,11 @@ func NewClient(args *ClientArgs) (*Client, error) {
 	}
 
 	return &Client{
-		h:           args.H,
-		service:     args.Service,
-		rotationKey: rk,
-		pdsHostname: args.PdsHostname,
+		h:              args.H,
+		service:        args.Service,
+		rotationKey:    rk,
+		pdsHostname:    args.PdsHostname,
+		serviceAuthKey: args.ServiceAuthKey,
 	}, nil
 }
 
@@ -110,9 +113,16 @@ func (c *Client) createDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey,
 		}(recovery)
 	}
 
+	// Derive the service-auth public key for the atproto_service verification method.
+	serviceAuthPub, err := c.serviceAuthKey.PublicKey()
+	if err != nil {
+		return nil, err
+	}
+
 	creds := DidCredentials{
 		VerificationMethods: map[string]string{
-			"atproto": pubsigkey.DIDKey(),
+			"atproto":         pubsigkey.DIDKey(),
+			"atproto_service": serviceAuthPub.DIDKey(),
 		},
 		RotationKeys: rotationKeys,
 		AlsoKnownAs: []string{

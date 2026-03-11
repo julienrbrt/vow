@@ -30,27 +30,15 @@ func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *ht
 
 	// Start with the PDS-generated credentials (verification methods, services,
 	// alsoKnownAs). These are always correct regardless of rotation key state.
-	// CreateDidCredentialsFromPublicKey sets verificationMethods["atproto"] to
-	// the passkey's did:key (commit signing).
+	// CreateDidCredentialsFromPublicKey sets:
+	//   - verificationMethods["atproto"] to the passkey's did:key (commit signing)
+	//   - verificationMethods["atproto_service"] to the PDS server key (service-auth)
 	creds, err := s.plcClient.CreateDidCredentialsFromPublicKey(pubKey, "", repo.Handle)
 	if err != nil {
 		logger.Error("error creating did credentials", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
-
-	// Add the PDS server key as the atproto_service verification method.
-	// Service-auth JWTs are signed by this key so background requests (feed
-	// loading, notifications, proxied reads) never require a passkey.
-	// AppViews that implement the atproto_service RFC will verify tokens against
-	// this key; others fall back to #atproto (known limitation until spec lands).
-	pdsDIDKey, err := s.pdsDIDKey()
-	if err != nil {
-		logger.Error("error deriving PDS did:key for atproto_service", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-	creds.VerificationMethods["atproto_service"] = pdsDIDKey
 
 	// If this is a did:plc identity, fetch the actual rotation keys from the
 	// current PLC document. After supplySigningKey transfers the rotation key
