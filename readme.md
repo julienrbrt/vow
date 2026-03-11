@@ -3,6 +3,16 @@
 > [!WARNING]
 > This is highly experimental software. Use with caution, especially during account migration.
 
+> [!IMPORTANT]
+> **Vow cannot fully interoperate with the ATProto network (Bluesky, AppViews, relays) in its current form.**
+>
+> ATProto uses a single DID document key (`verificationMethods.atproto`) for two distinct purposes: signing repo commits _and_ signing service-auth JWTs. A keyless PDS like Vow cannot satisfy both at once:
+>
+> - **Commit signing** works correctly. The user's passkey signs each write; the signature is stored in the commit and broadcast to relays.
+> - **Service-auth JWT signing** is broken. Every proxied request (loading feeds, notifications, any AppView call) requires a fresh JWT signed by `verificationMethods.atproto`. Under the current spec that means a passkey gesture per background request — an unacceptable UX — or the PDS signs with a different key and AppViews reject it with `BadJwtSignature`.
+>
+> There is no correct workaround within the current ATProto specification. A protocol change is required. A formal RFC proposing an optional `#atproto_service` verification method to separate the two signing responsibilities has been drafted [here](https://tangled.org/strings/did:plc:7kpq3n7brenbgyp2gx36hl6x/3mgqmwxzvlu22). Until that or an equivalent change lands upstream, Vow accounts will experience broken feeds, notifications, and proxied reads on standard ATProto clients.
+
 Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
 ## Features
@@ -282,7 +292,7 @@ Passkeys (WebAuthn/FIDO2) solve this:
 - **No browser extension required** — passkeys are built into every modern browser and OS.
 - **Hardware-backed security** — the private key lives in a secure enclave (TPM, Secure Enclave, or a roaming authenticator like a YubiKey). It never leaves the device.
 - **Familiar UX** — users authenticate with a fingerprint, face scan, or PIN instead of confirming a cryptographic message in a wallet popup.
-- **Correct signature format** — the passkey signs raw bytes with standard ECDSA, producing signatures that ATProto verifiers accept without transformation.
+- **Correct signature format** — the passkey signs with P-256 ECDSA. Commit signatures are stored and broadcast in the raw (r‖s) format ATProto expects. Service-auth JWT signatures, however, cannot be produced in a standards-compatible way by a passkey without a protocol-level change (see the limitation notice at the top of this document).
 
 ## Management Commands
 
