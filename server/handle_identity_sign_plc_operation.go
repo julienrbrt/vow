@@ -34,8 +34,8 @@ type ComAtprotoSignPlcOperationResponse struct {
 //
 // Unlike the previous implementation this handler never touches a private key.
 // The rotation key (held by the PDS) signs the PLC operation envelope as
-// required by the PLC protocol; the user's signing key (held in their Ethereum
-// wallet) signs only the inner payload bytes delivered over the WebSocket.
+// required by the PLC protocol; the user's signing key (held in their passkey)
+// signs only the inner payload bytes delivered over the WebSocket.
 func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger.With("name", "handleSignPlcOperation")
 
@@ -100,7 +100,7 @@ func (s *Server) handleSignPlcOperation(w http.ResponseWriter, r *http.Request) 
 		op.Services = *req.Services
 	}
 
-	// Serialise the operation to CBOR — this is the payload the user's wallet
+	// Serialise the operation to CBOR — this is the payload the user's passkey
 	// must sign. We send it to the signer and wait for the signature.
 	opCBOR, err := op.MarshalCBOR()
 	if err != nil {

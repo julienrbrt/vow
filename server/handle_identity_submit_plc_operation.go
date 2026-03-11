@@ -52,7 +52,7 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 	//   1. The signing key (verificationMethods.atproto) matches the registered key.
 	//   2. The service endpoint still points to this PDS.
 	//   3. The rotation keys include at least one key that was already authorised
-	//      (either the user's wallet key or the PDS key, depending on whether
+	//      (either the user's passkey or the PDS key, depending on whether
 	//      sovereignty has been transferred).
 	//   4. The operation was signed by one of the current rotation keys (enforced
 	//      by plc.directory on submission, not re-checked here).
@@ -62,7 +62,7 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

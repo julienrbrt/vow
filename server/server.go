@@ -516,6 +516,8 @@ func (s *Server) addRoutes() {
 	r.Post("/account/signup", s.handleAccountSignupPost)
 	r.Get("/account/signout", s.handleAccountSignout)
 	r.With(s.handleWebSessionMiddleware).Post("/account/supply-signing-key", s.handleSupplySigningKey)
+	r.With(s.handleWebSessionMiddleware).Post("/account/passkey-challenge", s.handlePasskeyChallenge)
+	r.With(s.handleWebSessionMiddleware).Post("/account/passkey-assertion-challenge", s.handlePasskeyAssertionChallenge)
 	r.With(s.handleWebSessionMiddleware).Post("/account/delete", s.handleAccountDelete)
 	r.Get("/account/signer", s.handleAccountSigner)
 

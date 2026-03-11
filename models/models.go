@@ -2,8 +2,6 @@ package models
 
 import (
 	"time"
-
-	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
 type Repo struct {
@@ -22,25 +20,17 @@ type Repo struct {
 	AccountDeleteCode              *string
 	AccountDeleteCodeExpiresAt     *time.Time
 	Password                       string
-	// PublicKey holds the compressed secp256k1 public key bytes for the
-	// account. This is the only key material the PDS retains.
-	PublicKey   []byte
-	Rev         string
-	Root        []byte
-	Preferences []byte
-	Deactivated bool
-}
-
-// EthereumAddress returns the Ethereum address for PublicKey.
-func (r *Repo) EthereumAddress() string {
-	if len(r.PublicKey) == 0 {
-		return ""
-	}
-	ecPub, err := gethcrypto.DecompressPubkey(r.PublicKey)
-	if err != nil {
-		return ""
-	}
-	return gethcrypto.PubkeyToAddress(*ecPub).Hex()
+	// PublicKey holds the compressed P-256 (secp256r1) public key bytes for
+	// the account. This is the only key material the PDS retains.
+	PublicKey []byte
+	// CredentialID is the WebAuthn credential ID returned by the authenticator
+	// during registration. It is stored so the server can build the
+	// allowCredentials list when requesting an assertion from the passkey.
+	CredentialID []byte
+	Rev          string
+	Root         []byte
+	Preferences  []byte
+	Deactivated  bool
 }
 
 func (r *Repo) Status() *string {

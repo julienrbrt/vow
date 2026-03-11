@@ -2,17 +2,16 @@ package server
 
 import (
 	"context"
-	"encoding/hex"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
-	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/bcrypt"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -149,19 +148,22 @@ func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Reques
 }
 
 // ---------------------------------------------------------------------------
-// /account/delete — browser endpoint (web session + wallet signature)
+// /account/delete — browser endpoint (web session + WebAuthn assertion)
 // ---------------------------------------------------------------------------
 
+// AccountDeleteRequest carries the WebAuthn assertion response fields sent by
+// the browser after the user confirms account deletion with their passkey.
 type AccountDeleteRequest struct {
-	WalletAddress string `json:"walletAddress" validate:"required"`
-	Signature     string `json:"signature"     validate:"required"`
+	CredentialID      string `json:"credentialId"`      // base64url
+	ClientDataJSON    string `json:"clientDataJSON"`    // base64url
+	AuthenticatorData string `json:"authenticatorData"` // base64url
+	Signature         string `json:"signature"`         // base64url DER-encoded ECDSA
 }
 
-// handleAccountDelete deletes the authenticated account after verifying that
-// the request is signed by the wallet whose public key is registered with the
-// account. Authentication is done via the web session cookie; the wallet
-// signature proves the user still controls the key, with no email or password
-// needed.
+// handleAccountDelete deletes the authenticated account after verifying a
+// WebAuthn assertion signed by the passkey registered for the account.
+// Authentication is via the web session cookie; the passkey assertion proves
+// the user still controls the device, with no password or email needed.
 func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.With("name", "handleAccountDelete")
@@ -172,12 +174,12 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The account must have a registered signing key; without it we have no
-	// wallet to verify against.
+	// The account must have a registered passkey; without it there is nothing
+	// to verify against.
 	if len(repo.PublicKey) == 0 {
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":   "NoSigningKey",
-			"message": "No signing key is registered for this account. Please register your wallet first.",
+			"message": "No passkey is registered for this account. Please register a passkey first.",
 		})
 		return
 	}
@@ -189,56 +191,55 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.validator.Struct(&req); err != nil {
-		logger.Error("validation failed", "error", err)
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "walletAddress and signature are required"})
+	if req.ClientDataJSON == "" || req.AuthenticatorData == "" || req.Signature == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "clientDataJSON, authenticatorData, and signature are required",
+		})
 		return
 	}
 
-	// Decode the 65-byte personal_sign signature.
-	sigHex := strings.TrimPrefix(req.Signature, "0x")
-	sig, err := hex.DecodeString(sigHex)
-	if err != nil || len(sig) != 65 {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signature must be a 65-byte hex string"})
-		return
-	}
-
-	// personal_sign uses v=27/28; go-ethereum SigToPub expects v=0/1.
-	if sig[64] >= 27 {
-		sig[64] -= 27
-	}
-
-	// Hash the message with the Ethereum personal_sign envelope.
-	msg := fmt.Sprintf("Delete account: %s", repo.Repo.Did)
-	msgHash := gethcrypto.Keccak256(
-		fmt.Appendf(nil, "\x19Ethereum Signed Message:\n%d%s", len(msg), msg),
-	)
-
-	// Recover the public key from the signature.
-	ecPub, err := gethcrypto.SigToPub(msgHash, sig)
+	// Decode base64url fields.
+	clientDataJSONBytes, err := base64.RawURLEncoding.DecodeString(req.ClientDataJSON)
 	if err != nil {
-		logger.Warn("public key recovery failed", "error", err)
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not recover public key from signature"})
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid clientDataJSON encoding"})
 		return
 	}
 
-	// Verify the recovered address matches the claimed wallet address.
-	recoveredAddr := gethcrypto.PubkeyToAddress(*ecPub).Hex()
-	if !strings.EqualFold(recoveredAddr, req.WalletAddress) {
-		logger.Warn("address mismatch", "claimed", req.WalletAddress, "recovered", recoveredAddr)
-		s.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "signature does not match the provided wallet address"})
+	authenticatorDataBytes, err := base64.RawURLEncoding.DecodeString(req.AuthenticatorData)
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid authenticatorData encoding"})
 		return
 	}
 
-	// Verify the recovered address matches the wallet registered on the account.
-	registeredAddr := repo.EthereumAddress()
-	if !strings.EqualFold(recoveredAddr, registeredAddr) {
-		logger.Warn("wallet not registered for account",
-			"recovered", recoveredAddr,
-			"registered", registeredAddr,
+	signatureDER, err := base64.RawURLEncoding.DecodeString(req.Signature)
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid signature encoding"})
+		return
+	}
+
+	// Reconstruct the expected challenge: SHA-256("Delete account: <did>").
+	// This is the same derivation used by handlePasskeyAssertionChallenge, so
+	// no server-side session state is needed.
+	msg := fmt.Sprintf("Delete account: %s", repo.Repo.Did)
+	sum := sha256.Sum256([]byte(msg))
+
+	// verifyAssertion checks the challenge, rpIdHash, UP flag, and P-256
+	// signature. It also returns the raw (r‖s) bytes, which we discard here.
+	if _, err := verifyAssertion(
+		repo.PublicKey,
+		sum[:],
+		clientDataJSONBytes,
+		authenticatorDataBytes,
+		signatureDER,
+		s.config.Hostname,
+	); err != nil {
+		logger.Warn("WebAuthn assertion verification failed for account delete",
 			"did", repo.Repo.Did,
+			"error", err,
 		)
-		s.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "signature wallet does not match the key registered for this account"})
+		s.writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "passkey verification failed: " + err.Error(),
+		})
 		return
 	}
 

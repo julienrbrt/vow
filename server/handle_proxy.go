@@ -89,7 +89,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		// exp=0 tells signServiceAuthJWT to use the default lifetime and
 		// cache the resulting token so repeated proxy calls for the same
-		// (aud, lxm) pair reuse it instead of prompting the wallet each time.
+		// (aud, lxm) pair reuse it instead of prompting the passkey each time.
 		token, err := s.signServiceAuthJWT(r.Context(), repo, aud, lxm, 0)
 		if helpers.HandleSignerError(w, err) {
 			logger.Error("error signing proxy JWT", "error", err)

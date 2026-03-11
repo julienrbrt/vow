@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"net/http"
 	"time"
 
@@ -65,13 +66,20 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Encode the credential ID as base64url so the template can pass it to
+	// navigator.credentials.get() as the allowCredentials entry.
+	credentialID := ""
+	if len(repo.CredentialID) > 0 {
+		credentialID = base64.RawURLEncoding.EncodeToString(repo.CredentialID)
+	}
+
 	if err := s.renderTemplate(w, "account.html", map[string]any{
-		"Handle":          repo.Handle,
-		"Did":             repo.Repo.Did,
-		"HasSigningKey":   len(repo.PublicKey) > 0,
-		"EthereumAddress": repo.EthereumAddress(),
-		"Tokens":          tokenInfo,
-		"flashes":         s.getFlashesFromSession(w, r, sess),
+		"Handle":        repo.Handle,
+		"Did":           repo.Repo.Did,
+		"HasSigningKey": len(repo.PublicKey) > 0,
+		"CredentialID":  credentialID,
+		"Tokens":        tokenInfo,
+		"flashes":       s.getFlashesFromSession(w, r, sess),
 	}); err != nil {
 		logger.Error("failed to render template", "error", err)
 	}

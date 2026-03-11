@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -35,17 +36,23 @@ type wsSignRequest struct {
 	Type      string           `json:"type"`      // always "sign_request"
 	RequestID string           `json:"requestId"` // UUID, echoed back in the response
 	Did       string           `json:"did"`
-	Payload   string           `json:"payload"`   // base64url-encoded unsigned commit CBOR
+	Payload   string           `json:"payload"`   // base64url-encoded unsigned commit CBOR (used as the WebAuthn challenge)
 	Ops       []PendingWriteOp `json:"ops"`       // human-readable summary shown to user
 	ExpiresAt string           `json:"expiresAt"` // RFC3339
 }
 
 // wsIncoming is used for initial type-sniffing before full decode.
+//
+// sign_response carries the three fields from the WebAuthn AuthenticatorAssertionResponse:
+//   - AuthenticatorData: base64url authenticatorData bytes
+//   - ClientDataJSON:    base64url clientDataJSON bytes
+//   - Signature:         base64url DER-encoded ECDSA signature
 type wsIncoming struct {
-	Type      string `json:"type"`
-	RequestID string `json:"requestId"`
-	// sign_response: base64url-encoded signature bytes.
-	Signature string `json:"signature,omitempty"`
+	Type              string `json:"type"`
+	RequestID         string `json:"requestId"`
+	AuthenticatorData string `json:"authenticatorData,omitempty"` // base64url
+	ClientDataJSON    string `json:"clientDataJSON,omitempty"`    // base64url
+	Signature         string `json:"signature,omitempty"`         // base64url DER-encoded ECDSA
 }
 
 // handleSignerConnect upgrades the connection to a WebSocket and registers it
@@ -57,11 +64,10 @@ type wsIncoming struct {
 //
 //  1. When a write handler needs a signature it calls SignerHub.RequestSignature
 //     which pushes a signerRequest onto the conn.requests channel.
-//  2. This goroutine picks it up, writes the sign_request (or pay_request) JSON
-//     frame, and waits for a sign_response / pay_response or their reject
-//     counterparts from the client.
-//  3. The reply is forwarded back to the waiting write handler via the reply
-//     channel inside the signerRequest.
+//  2. This goroutine picks it up, writes the sign_request JSON frame, and waits
+//     for a sign_response or sign_reject from the client.
+//  3. The WebAuthn assertion is verified here; the resulting raw (r‖s) signature
+//     bytes are forwarded to the waiting write handler via DeliverSignature.
 //
 // The loop also handles WebSocket ping/pong: the server sends a ping every 20 s
 // and expects a pong within 10 s (gorilla handles pong automatically).
@@ -135,10 +141,13 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 	// inbound carries decoded messages from the reader goroutine.
 	inbound := make(chan wsIncoming, 4)
 
-	// nextReq carries the next queued request to be sent to the wallet.
-	// The NextRequest goroutine blocks until a request is ready and no other
-	// request is in-flight (serialising wallet prompts automatically).
+	// nextReq carries the next queued request to be sent to the signer.
 	nextReq := make(chan signerRequest, 1)
+
+	// pendingPayloads maps requestID → base64url payload so that when a
+	// sign_response arrives we can reconstruct the expected WebAuthn challenge
+	// (the raw bytes that the payload string encodes).
+	pendingPayloads := make(map[string]string)
 
 	ctx := r.Context()
 
@@ -164,7 +173,7 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Queue pump: feeds the main loop one request at a time, respecting the
-	// wallet's one-at-a-time constraint enforced inside NextRequest.
+	// passkey's one-at-a-time constraint enforced inside NextRequest.
 	go func() {
 		for {
 			req, ok := sc.NextRequest(ctx)
@@ -206,20 +215,24 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 		case in := <-inbound:
 			switch in.Type {
 			case "sign_response":
-				if in.Signature == "" {
-					logger.Warn("signer: sign_response missing signature", "did", did)
+				payload, ok := pendingPayloads[in.RequestID]
+				if !ok {
+					logger.Warn("signer: sign_response for unknown requestId (no payload)", "did", did, "requestId", in.RequestID)
 					continue
 				}
-				sigBytes, err := base64.RawURLEncoding.DecodeString(in.Signature)
+				delete(pendingPayloads, in.RequestID)
+
+				rawSig, err := verifyWebAuthnSignResponse(repo.PublicKey, payload, in, s.config.Hostname, logger)
 				if err != nil {
-					logger.Warn("signer: sign_response bad base64url", "did", did, "error", err)
+					logger.Warn("signer: sign_response verification failed", "did", did, "requestId", in.RequestID, "error", err)
 					continue
 				}
-				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
+				if !s.signerHub.DeliverSignature(did, in.RequestID, rawSig) {
 					logger.Warn("signer: sign_response for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
 
 			case "sign_reject":
+				delete(pendingPayloads, in.RequestID)
 				if !s.signerHub.DeliverRejection(did, in.RequestID) {
 					logger.Warn("signer: sign_reject for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
@@ -234,6 +247,14 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 				logger.Error("signer: failed to write request", "did", did, "error", err)
 				req.reply <- signerReply{err: helpers.ErrSignerNotConnected}
 				return
+			}
+
+			// Record the payload so we can verify the WebAuthn challenge when
+			// the sign_response arrives.
+			if payload, err := extractPayloadFromMsg(req.msg); err == nil {
+				pendingPayloads[req.requestID] = payload
+			} else {
+				logger.Warn("signer: could not extract payload from sign_request", "did", did, "error", err)
 			}
 
 			logger.Info("signer: request sent", "did", did, "requestId", req.requestID)
@@ -269,6 +290,74 @@ func buildSignRequestMsg(requestID string, did string, payloadB64 string, ops []
 		Ops:       ops,
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// extractPayloadFromMsg extracts the "payload" field from a sign_request JSON
+// message without a full re-parse.
+func extractPayloadFromMsg(msg []byte) (string, error) {
+	var req struct {
+		Payload string `json:"payload"`
+	}
+	if err := json.Unmarshal(msg, &req); err != nil {
+		return "", err
+	}
+	if req.Payload == "" {
+		return "", nil
+	}
+	return req.Payload, nil
+}
+
+// verifyWebAuthnSignResponse decodes the three base64url fields from a
+// sign_response message, reconstructs the expected challenge from the payload,
+// verifies the WebAuthn P-256 assertion, and returns the raw 64-byte (r‖s)
+// signature for use in ATProto commits and JWTs.
+//
+// pubKey is the compressed P-256 public key stored in the database.
+// payloadB64 is the base64url-encoded challenge bytes that were sent in the
+// sign_request (the raw CBOR bytes of the unsigned commit, or the SHA-256 of
+// the JWT signing input for service-auth tokens).
+func verifyWebAuthnSignResponse(
+	pubKey []byte,
+	payloadB64 string,
+	in wsIncoming,
+	rpID string,
+	logger *slog.Logger,
+) ([]byte, error) {
+	if in.AuthenticatorData == "" || in.ClientDataJSON == "" || in.Signature == "" {
+		return nil, helpers.ErrSignerNotConnected // reuse a sentinel; caller logs
+	}
+
+	// The challenge passed to navigator.credentials.get() was the raw bytes
+	// decoded from payloadB64. The browser re-encodes them as base64url in
+	// clientDataJSON.challenge — so the expected challenge is exactly those
+	// raw bytes.
+	expectedChallenge, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	if err != nil {
+		return nil, err
+	}
+
+	clientDataJSONBytes, err := base64.RawURLEncoding.DecodeString(in.ClientDataJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	authenticatorDataBytes, err := base64.RawURLEncoding.DecodeString(in.AuthenticatorData)
+	if err != nil {
+		return nil, err
+	}
+
+	signatureDER, err := base64.RawURLEncoding.DecodeString(in.Signature)
+	if err != nil {
+		return nil, err
+	}
+
+	rawSig, err := verifyAssertion(pubKey, expectedChallenge, clientDataJSONBytes, authenticatorDataBytes, signatureDER, rpID)
+	if err != nil {
+		logger.With("rpID", rpID).Debug("verifyAssertion detail", "error", err)
+		return nil, err
+	}
+
+	return rawSig, nil
 }
 
 // isTokenExpired returns true if the JWT's exp claim is in the past.

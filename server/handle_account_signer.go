@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -62,6 +61,10 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 	inbound := make(chan wsIncoming, 4)
 	nextReq := make(chan signerRequest, 1)
 
+	// pendingPayloads maps requestID → base64url payload so we can reconstruct
+	// the expected WebAuthn challenge when a sign_response arrives.
+	pendingPayloads := make(map[string]string)
+
 	ctx := r.Context()
 	go func() {
 		for {
@@ -110,20 +113,24 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 		case in := <-inbound:
 			switch in.Type {
 			case "sign_response":
-				if in.Signature == "" {
-					logger.Warn("signer: sign_response missing signature", "did", did)
+				payload, ok := pendingPayloads[in.RequestID]
+				if !ok {
+					logger.Warn("signer: sign_response for unknown requestId (no payload)", "did", did, "requestId", in.RequestID)
 					continue
 				}
-				sigBytes, err := base64.RawURLEncoding.DecodeString(in.Signature)
+				delete(pendingPayloads, in.RequestID)
+
+				rawSig, err := verifyWebAuthnSignResponse(repo.PublicKey, payload, in, s.config.Hostname, logger)
 				if err != nil {
-					logger.Warn("signer: sign_response bad base64url", "did", did, "error", err)
+					logger.Warn("signer: sign_response verification failed", "did", did, "requestId", in.RequestID, "error", err)
 					continue
 				}
-				if !s.signerHub.DeliverSignature(did, in.RequestID, sigBytes) {
+				if !s.signerHub.DeliverSignature(did, in.RequestID, rawSig) {
 					logger.Warn("signer: sign_response for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
 
 			case "sign_reject":
+				delete(pendingPayloads, in.RequestID)
 				if !s.signerHub.DeliverRejection(did, in.RequestID) {
 					logger.Warn("signer: sign_reject for unknown requestId", "did", did, "requestId", in.RequestID)
 				}
@@ -137,6 +144,14 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 				logger.Error("signer: failed to write request", "did", did, "error", err)
 				req.reply <- signerReply{err: helpers.ErrSignerNotConnected}
 				return
+			}
+
+			// Record the payload so we can verify the WebAuthn challenge when
+			// the sign_response arrives.
+			if payload, err := extractPayloadFromMsg(req.msg); err == nil {
+				pendingPayloads[req.requestID] = payload
+			} else {
+				logger.Warn("signer: could not extract payload from sign_request", "did", did, "error", err)
 			}
 
 			logger.Info("signer: request sent", "did", did, "requestId", req.requestID)

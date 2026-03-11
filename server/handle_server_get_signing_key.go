@@ -10,7 +10,7 @@ import (
 
 // PendingWriteOp is a human-readable summary of a single operation inside a
 // signing request, sent to the signer so the user knows what they are
-// approving before the wallet prompt appears.
+// approving before the passkey prompt appears.
 type PendingWriteOp struct {
 	Type       string `json:"type"`
 	Collection string `json:"collection"`
@@ -25,7 +25,7 @@ type ComAtprotoServerGetSigningKeyResponse struct {
 	PublicKey string `json:"publicKey"`
 }
 
-// handleGetSigningKey returns the compressed secp256k1 public key registered
+// handleGetSigningKey returns the compressed P-256 public key registered
 // for the authenticated account, encoded as a did:key string.
 //
 // The private key is never held by the PDS; this endpoint only confirms that a
@@ -44,7 +44,7 @@ func (s *Server) handleGetSigningKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

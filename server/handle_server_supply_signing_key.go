@@ -1,49 +1,45 @@
 package server
 
 import (
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"net/http"
 	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
-	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 	"pkg.rbrt.fr/vow/plc"
 )
 
-// ComAtprotoServerSupplySigningKeyRequest is sent by the account page to
-// register the user's secp256k1 public key with the PDS. The client sends the
-// wallet address and the signature over a fixed registration message; the PDS
-// recovers the public key server-side using go-ethereum and verifies it
-// matches the wallet address before storing it.
-type ComAtprotoServerSupplySigningKeyRequest struct {
-	// WalletAddress is the EIP-55 checksummed Ethereum address of the wallet.
-	WalletAddress string `json:"walletAddress" validate:"required"`
-	// Signature is the hex-encoded 65-byte personal_sign signature (0x-prefixed).
-	Signature string `json:"signature" validate:"required"`
+// SupplySigningKeyRequest is sent by the account page to register a WebAuthn
+// passkey as the account's signing key. The browser calls
+// navigator.credentials.create() and forwards the raw attestation response
+// fields here; the server parses the CBOR attestation object, extracts the
+// P-256 public key, and stores it alongside the credential ID.
+type SupplySigningKeyRequest struct {
+	// ClientDataJSON is the base64url-encoded clientDataJSON bytes from the
+	// AuthenticatorAttestationResponse.
+	ClientDataJSON string `json:"clientDataJSON" validate:"required"`
+	// AttestationObject is the base64url-encoded attestationObject CBOR from
+	// the AuthenticatorAttestationResponse.
+	AttestationObject string `json:"attestationObject" validate:"required"`
 }
 
-type ComAtprotoServerSupplySigningKeyResponse struct {
-	Did       string `json:"did"`
-	PublicKey string `json:"publicKey"` // did:key representation
+type SupplySigningKeyResponse struct {
+	Did          string `json:"did"`
+	PublicKey    string `json:"publicKey"`    // did:key representation
+	CredentialID string `json:"credentialId"` // base64url
 }
 
-// handleSupplySigningKey lets the account page register the user's
-// secp256k1 public key. The PDS stores only the compressed public key bytes
-// and updates the PLC DID document so the key becomes the active
-// verificationMethods.atproto entry.
+// handleSupplySigningKey registers a WebAuthn passkey for the authenticated
+// account. The private key never leaves the authenticator; the PDS stores only
+// the compressed P-256 public key and the credential ID.
 //
-// The private key is never transmitted to or stored by the PDS.
-// registrationMessage is the fixed plaintext that the wallet must sign during
-// key registration. It is prefixed with the Ethereum personal_sign envelope
-// ("\x19Ethereum Signed Message:\n<len>") by the wallet before signing.
-const registrationMessage = "Vow key registration"
-
+// On success, the account's PLC DID document is updated so that the passkey's
+// did:key becomes the active atproto verification method and rotation key.
 func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.With("name", "handleSupplySigningKey")
@@ -54,7 +50,7 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var req ComAtprotoServerSupplySigningKeyRequest
+	var req SupplySigningKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logger.Error("error decoding request", "error", err)
 		helpers.InputError(w, new("could not decode request body"))
@@ -63,64 +59,31 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 
 	if err := s.validator.Struct(req); err != nil {
 		logger.Error("validation failed", "error", err)
-		helpers.InputError(w, new("walletAddress and signature are required"))
+		helpers.InputError(w, new("clientDataJSON and attestationObject are required"))
 		return
 	}
 
-	// Decode the 65-byte personal_sign signature.
-	sigHex := strings.TrimPrefix(req.Signature, "0x")
-	sig, err := hex.DecodeString(sigHex)
-	if err != nil || len(sig) != 65 {
-		helpers.InputError(w, new("signature must be a 65-byte hex string"))
-		return
-	}
-
-	// personal_sign uses v=27/28; go-ethereum SigToPub expects v=0/1.
-	if sig[64] >= 27 {
-		sig[64] -= 27
-	}
-
-	// Hash the message the same way personal_sign does:
-	// keccak256("\x19Ethereum Signed Message:\n<len><message>")
-	msgHash := gethcrypto.Keccak256(
-		fmt.Appendf(nil, "\x19Ethereum Signed Message:\n%d%s",
-			len(registrationMessage), registrationMessage),
-	)
-
-	// Recover the uncompressed public key.
-	ecPub, err := gethcrypto.SigToPub(msgHash, sig)
+	// Parse the attestation object and extract the P-256 public key +
+	// credential ID. We accept both "none" and self-attestation.
+	keyBytes, credentialID, err := parseAttestationObject(req.AttestationObject)
 	if err != nil {
-		logger.Warn("public key recovery failed", "error", err)
-		helpers.InputError(w, new("could not recover public key from signature"))
+		logger.Warn("attestation parsing failed", "error", err)
+		helpers.InputError(w, new("could not parse attestation object"))
 		return
 	}
 
-	// Verify the recovered key matches the claimed wallet address.
-	recoveredAddr := gethcrypto.PubkeyToAddress(*ecPub).Hex()
-	if !strings.EqualFold(recoveredAddr, req.WalletAddress) {
-		logger.Warn("recovered address mismatch",
-			"claimed", req.WalletAddress,
-			"recovered", recoveredAddr,
-		)
-		helpers.InputError(w, new("recovered address does not match walletAddress"))
-		return
-	}
-
-	// Compress the public key (33 bytes).
-	keyBytes := gethcrypto.CompressPubkey(ecPub)
-
-	// Validate the compressed key is accepted by the atproto library.
-	pubKey, err := atcrypto.ParsePublicBytesK256(keyBytes)
+	// Validate the compressed key is a well-formed P-256 point.
+	pubKey, err := atcrypto.ParsePublicBytesP256(keyBytes)
 	if err != nil {
-		logger.Error("compressed key rejected by atcrypto", "error", err)
-		helpers.ServerError(w, nil)
+		logger.Error("compressed P-256 key rejected by atcrypto", "error", err)
+		helpers.InputError(w, new("invalid P-256 public key in attestation"))
 		return
 	}
 
 	pubDIDKey := pubKey.DIDKey()
 
-	// Update the PLC DID document if this is a did:plc identity so that the
-	// new public key is the active atproto verification method.
+	// Update the PLC DID document so the passkey's did:key becomes the active
+	// atproto verification method and the sole rotation key.
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 		if err != nil {
@@ -135,11 +98,9 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		maps.Copy(newVerificationMethods, latest.Operation.VerificationMethods)
 		newVerificationMethods["atproto"] = pubDIDKey
 
-		// Replace the PDS rotation key with the user's wallet key. After
-		// this operation the PDS can no longer unilaterally modify the DID
-		// document — only the user's Ethereum wallet can authorise future
-		// PLC operations. This is the moment the identity becomes
-		// user-sovereign.
+		// Replace the PDS rotation key with the passkey's did:key. After this
+		// operation the PDS can no longer unilaterally modify the DID document
+		// — only the user's passkey can authorise future PLC operations.
 		newRotationKeys := []string{pubDIDKey}
 
 		op := plc.Operation{
@@ -151,10 +112,9 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 			Prev:                &latest.Cid,
 		}
 
-		// The PLC operation is signed by the PDS rotation key, which still
-		// has authority over the DID at this point. This is the last
-		// operation the PDS will ever be able to sign — it is voluntarily
-		// handing over control to the user's wallet key.
+		// The PDS rotation key signs this PLC operation — this is the last
+		// PLC operation the PDS will ever be able to sign on behalf of the
+		// user. It is voluntarily handing over control to the passkey.
 		if err := s.plcClient.SignOp(&op); err != nil {
 			logger.Error("error signing PLC operation with rotation key", "error", err)
 			helpers.ServerError(w, nil)
@@ -168,12 +128,12 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Persist the compressed public key.
+	// Persist the compressed P-256 public key and credential ID.
 	if err := s.db.Exec(ctx,
-		"UPDATE repos SET public_key = ? WHERE did = ?",
-		nil, keyBytes, repo.Repo.Did,
+		"UPDATE repos SET public_key = ?, credential_id = ? WHERE did = ?",
+		nil, keyBytes, credentialID, repo.Repo.Did,
 	).Error; err != nil {
-		logger.Error("error updating public key in db", "error", err)
+		logger.Error("error updating public key and credential ID in db", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
@@ -183,13 +143,15 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		logger.Warn("error busting DID doc cache", "error", err)
 	}
 
-	logger.Info("public signing key registered via BYOK — rotation key transferred to user",
+	logger.Info("passkey registered — rotation key transferred to user",
 		"did", repo.Repo.Did,
 		"publicKey", pubDIDKey,
+		"credentialIDLen", len(credentialID),
 	)
 
-	s.writeJSON(w, 200, ComAtprotoServerSupplySigningKeyResponse{
-		Did:       repo.Repo.Did,
-		PublicKey: pubDIDKey,
+	s.writeJSON(w, 200, SupplySigningKeyResponse{
+		Did:          repo.Repo.Did,
+		PublicKey:    pubDIDKey,
+		CredentialID: base64.RawURLEncoding.EncodeToString(credentialID),
 	})
 }

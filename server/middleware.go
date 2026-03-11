@@ -155,12 +155,17 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			repo = maybeRepo
 		}
 
-		if token.Header["alg"] != "ES256K" {
+		// isUserSignedToken is true for service-auth JWTs signed by the user's
+		// passkey (ES256 with an lxm claim). Regular access tokens use ES256
+		// too but are signed by the PDS private key and carry no lxm claim.
+		isUserSignedToken := token.Header["alg"] == "ES256" && hasLxm
+
+		if !isUserSignedToken {
 			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
 					return nil, fmt.Errorf("unsupported signing method: %v", t.Header["alg"])
 				}
-				return s.privateKey.Public(), nil
+				return &s.privateKey.PublicKey, nil
 			})
 			if err != nil {
 				logger.Error("error parsing jwt", "error", err)
@@ -191,13 +196,13 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			if repo == nil {
 				sub, ok := claims["sub"].(string)
 				if !ok {
-					s.logger.Error("no sub claim in ES256K token and repo not set")
+					s.logger.Error("no sub claim in user-signed token and repo not set")
 					helpers.InvalidTokenError(w)
 					return
 				}
 				maybeRepo, err := s.getRepoActorByDid(ctx, sub)
 				if err != nil {
-					s.logger.Error("error fetching repo for ES256K verification", "error", err)
+					s.logger.Error("error fetching repo for user-signed token verification", "error", err)
 					helpers.ServerError(w, nil)
 					return
 				}
@@ -205,25 +210,23 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 				did = sub
 			}
 
-			// The PDS never holds a private key. Verify the ES256K JWT
-			// signature using the compressed public key stored in PublicKey.
+			// The PDS never holds the user's private key. Verify the JWT
+			// signature using the compressed P-256 public key stored in the DB.
 			if len(repo.PublicKey) == 0 {
 				logger.Error("no public key registered for account", "did", repo.Repo.Did)
 				helpers.ServerError(w, nil)
 				return
 			}
 
-			pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
+			pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
 			if err != nil {
 				logger.Error("can't parse stored public key", "error", err)
 				helpers.ServerError(w, nil)
 				return
 			}
 
-			// sigBytes is already the compact (r||s) 64-byte form. Verify
-			// using HashAndVerifyLenient which hashes signingInput internally.
 			if err := pubKey.HashAndVerifyLenient([]byte(signingInput), sigBytes); err != nil {
-				logger.Error("ES256K signature verification failed", "error", err)
+				logger.Error("user-signed JWT verification failed", "error", err)
 				helpers.ServerError(w, nil)
 				return
 			}

@@ -75,7 +75,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 
 		// Determine whether the PDS rotation key still has authority over
 		// this DID. After supplySigningKey transfers the rotation key to the
-		// user's wallet, the PDS key is no longer in the rotation key list
+		// user's passkey, the PDS key is no longer in the rotation key list
 		// and cannot sign PLC operations.
 		pdsRotationDIDKey := s.plcClient.RotationDIDKey()
 		pdsCanSign := slices.Contains(latest.Operation.RotationKeys, pdsRotationDIDKey)
@@ -88,7 +88,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		} else {
-			// Rotation key belongs to the user's wallet. Delegate the
+			// Rotation key belongs to the user's passkey. Delegate the
 			// signing to the signer over WebSocket, same as
 			// handleSignPlcOperation does for other PLC operations.
 			opCBOR, err := op.MarshalCBOR()

@@ -80,10 +80,9 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// signServiceAuthJWT returns a signed ES256K service-auth JWT for the given
-// (aud, lxm) pair, reusing a cached token when possible. Only when no cached
-// token is available does it send a signing request to the user's wallet via
-// the SignerHub WebSocket.
+// signServiceAuthJWT returns a signed ES256 service-auth JWT for the given
+// (aud, lxm) pair. It sends a signing request to the user's passkey via the
+// SignerHub WebSocket and waits for the verified raw (r‖s) signature.
 //
 // The returned string is a fully formed "header.payload.signature" JWT ready to
 // be placed in an Authorization: Bearer header.
@@ -104,8 +103,8 @@ func (s *Server) signServiceAuthJWT(
 
 	// ── Build header + payload ────────────────────────────────────────────
 	header := map[string]string{
-		"alg": "ES256K",
-		"crv": "secp256k1",
+		"alg": "ES256",
+		"crv": "P-256",
 		"typ": "JWT",
 	}
 	hj, err := json.Marshal(header)
@@ -144,15 +143,11 @@ func (s *Server) signServiceAuthJWT(
 	// base64url(header) + "." + base64url(payload).
 	signingInput := encHeader + "." + encPayload
 
-	// The wallet signs the SHA-256 hash of the signing input, which is what
-	// ES256K requires. We pass the raw signingInput bytes as the payload;
-	// HashAndVerifyLenient on the verification side hashes them before
-	// verifying, matching what personal_sign does after EIP-191 prefix
-	// stripping (or eth_sign which skips the prefix).
-	//
-	// We send the SHA-256 pre-image (the signingInput string) rather than the
-	// hash so the signer can display it meaningfully and so the wallet can
-	// apply its own hashing. This matches the pattern used for commit signing.
+	// ES256 requires signing the SHA-256 hash of the signing input. We send
+	// the hash as the WebAuthn challenge (the passkey will sign
+	// authenticatorData ‖ SHA-256(clientDataJSON) where clientDataJSON.challenge
+	// = base64url(hash)). The WS handler verifies the full assertion and
+	// delivers the raw (r‖s) signature bytes back to this function.
 	hash := sha256.Sum256([]byte(signingInput))
 	payloadB64 := base64.RawURLEncoding.EncodeToString(hash[:])
 
@@ -180,8 +175,9 @@ func (s *Server) signServiceAuthJWT(
 		return "", err
 	}
 
-	// sigBytes is the raw compact (r||s) or EIP-191 signature returned by the
-	// wallet. Trim to 64 bytes (r||s) if the wallet appended a recovery byte.
+	// sigBytes is the raw 64-byte (r‖s) P-256 signature delivered by the WS
+	// handler after WebAuthn assertion verification. Trim to 64 bytes just in
+	// case an old client appended a recovery byte.
 	if len(sigBytes) == 65 {
 		sigBytes = sigBytes[:64]
 	}

@@ -21,7 +21,7 @@ func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *ht
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesK256(repo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)
@@ -39,7 +39,7 @@ func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *ht
 
 	// If this is a did:plc identity, fetch the actual rotation keys from the
 	// current PLC document. After supplySigningKey transfers the rotation key
-	// to the user's wallet, the PDS key is no longer authoritative and we
+	// to the user's passkey, the PDS key is no longer authoritative and we
 	// must reflect the real state.
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		ctx := context.WithValue(r.Context(), identity.SkipCacheKey, true)

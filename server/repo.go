@@ -219,8 +219,8 @@ func buildUnsignedCommit(ctx context.Context, bs blockstore.Blockstore, r *atp.R
 // provided raw signature bytes, reserialises the commit, writes the commit
 // block to the blockstore, and returns the commit CID.
 //
-// sig must be the raw secp256k1 signature (compact or DER) over uc.cbor as
-// produced by an Ethereum wallet's personal_sign / eth_sign call.
+// sig must be the raw 64-byte (r‖s) P-256 ECDSA signature over uc.cbor as
+// produced by the passkey WebAuthn assertion and verified by the WS handler.
 func finaliseCommit(ctx context.Context, bs blockstore.Blockstore, uc *unsignedCommit, sig []byte) (cid.Cid, error) {
 	// Decode the unsigned commit so we can attach the signature field.
 	var commit atp.Commit
@@ -599,7 +599,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return nil, fmt.Errorf("no public key registered for account %s", urepo.Did)
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesK256(urepo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(urepo.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing stored public key: %w", err)
 	}

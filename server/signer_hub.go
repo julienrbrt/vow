@@ -31,20 +31,20 @@ type signerReply struct {
 
 // signerConn represents one active signer WebSocket connection for a DID.
 // It owns an unbounded queue of pending requests and a map of in-flight
-// requests waiting for a reply from the wallet.
+// requests waiting for a reply from the passkey.
 type signerConn struct {
 	// mu protects pending and inflight.
 	mu sync.Mutex
 
 	// pending is an ordered queue of requests that have not yet been sent to
-	// the wallet. The WS goroutine drains it one at a time: it pops the head,
+	// the passkey. The WS goroutine drains it one at a time: it pops the head,
 	// sends the sign_request frame, moves the request into inflight, and only
-	// pops the next one after a reply arrives. This serialises wallet prompts
+	// pops the next one after a reply arrives. This serialises passkey prompts
 	// (the user must confirm each one before the next appears) while allowing
 	// any number of callers to enqueue work concurrently.
 	pending []signerRequest
 
-	// inflight holds the single request that has been sent to the wallet and
+	// inflight holds the single request that has been sent to the passkey and
 	// is awaiting a sign_response / sign_reject. Keyed by requestID.
 	inflight map[string]signerRequest
 
@@ -127,13 +127,13 @@ func (h *SignerHub) IsConnected(did string) bool {
 }
 
 // RequestSignature enqueues a signing request for did and blocks until one of:
-//   - The wallet sends sign_response  → returns the signature bytes.
-//   - The wallet sends sign_reject    → returns helpers.ErrSignerRejected.
+//   - The signer sends sign_response  → returns the signature bytes.
+//   - The signer sends sign_reject    → returns helpers.ErrSignerRejected.
 //   - The WebSocket disconnects       → returns helpers.ErrSignerNotConnected.
 //   - ctx is cancelled or times out  → returns helpers.ErrSignerTimeout or ctx.Err().
 //
 // Multiple callers for the same DID are all queued and processed sequentially
-// (the wallet sees one prompt at a time). Callers for different DIDs are
+// (the passkey sees one prompt at a time). Callers for different DIDs are
 // independent.
 func (h *SignerHub) RequestSignature(ctx context.Context, did string, requestID string, msg []byte) ([]byte, error) {
 	h.mu.Lock()
@@ -243,17 +243,17 @@ func (h *SignerHub) deliver(did string, requestID string, reply signerReply) boo
 	return true
 }
 
-// NextRequest blocks until a pending request is ready to be sent to the wallet
-// and no other request is currently in-flight (wallets handle one prompt at a
-// time). It moves the request from pending into inflight before returning, so
-// the caller just needs to write it to the WebSocket.
+// NextRequest blocks until a pending request is ready to be sent to the signer
+// and no other request is currently in-flight (the passkey handles one prompt
+// at a time). It moves the request from pending into inflight before returning,
+// so the caller just needs to write it to the WebSocket.
 //
 // Returns (request, true) on success, or (zero, false) if the connection is
 // going away (done closed or ctx cancelled).
 func (conn *signerConn) NextRequest(ctx context.Context) (signerRequest, bool) {
 	for {
 		conn.mu.Lock()
-		// Only dequeue when nothing is in-flight (wallet is free).
+		// Only dequeue when nothing is in-flight (passkey is free).
 		if len(conn.pending) > 0 && len(conn.inflight) == 0 {
 			req := conn.pending[0]
 			conn.pending = conn.pending[1:]

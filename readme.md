@@ -222,9 +222,13 @@ Authorization: Bearer <access-token>
 {
   "type": "sign_response",
   "requestId": "uuid",
-  "signature": "<base64url-encoded signature bytes>"
+  "authenticatorData": "<base64url authenticatorData bytes>",
+  "clientDataJSON": "<base64url clientDataJSON bytes>",
+  "signature": "<base64url DER-encoded ECDSA signature>"
 }
 ```
+
+The server decodes all three fields, reconstructs the signed message as `authenticatorData ‖ SHA-256(clientDataJSON)`, verifies the P-256 signature, and converts the DER-encoded signature to the raw 64-byte (r‖s) format expected by ATProto before delivering it to the waiting write handler.
 
 **Rejection message (browser → PDS):**
 

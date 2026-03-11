@@ -13,15 +13,15 @@ import (
 )
 
 var (
-	// ErrSignerNotConnected is the sentinel returned when no wallet is connected.
+	// ErrSignerNotConnected is the sentinel returned when no signer tab is open.
 	ErrSignerNotConnected = errors.New("signer not connected")
 
-	// ErrSignerRejected is the sentinel returned when the wallet rejected the
-	// signing request.
+	// ErrSignerRejected is the sentinel returned when the passkey prompt was
+	// dismissed or the signing request was explicitly rejected.
 	ErrSignerRejected = errors.New("signer rejected")
 
-	// ErrSignerTimeout is the sentinel returned when the wallet did not respond
-	// within the deadline.
+	// ErrSignerTimeout is the sentinel returned when the passkey did not
+	// respond within the deadline.
 	ErrSignerTimeout = errors.New("signer timeout")
 )
 
@@ -48,8 +48,8 @@ func InputError(w http.ResponseWriter, custom *string) {
 // guard).
 //
 // The error codes follow the ATProto convention used by the official PDS:
-//   - "AccountNotFound"  — no wallet tab is open / connected.
-//   - "UserTookDownRepo" — the user explicitly rejected the signing prompt.
+//   - "AccountNotFound"  — no signer tab is open / connected.
+//   - "UserTookDownRepo" — the user dismissed the passkey prompt or rejected it.
 //   - "RepoDeactivated"  — the signing deadline elapsed with no response.
 //
 // These are the closest standard codes to what happened; they tell AppViews
@@ -63,17 +63,17 @@ func HandleSignerError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, ErrSignerNotConnected):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":   "AccountNotFound",
-			"message": "No wallet signer is connected for this account. Open the account page and keep it in a browser tab.",
+			"message": "No signer is connected for this account. Open the account page and keep it in a browser tab.",
 		})
 	case errors.Is(err, ErrSignerRejected):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":   "UserTookDownRepo",
-			"message": "The wallet rejected the signing request.",
+			"message": "The passkey prompt was dismissed or the signing request was rejected.",
 		})
 	case errors.Is(err, ErrSignerTimeout):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":   "RepoDeactivated",
-			"message": "The wallet did not respond within the signing deadline.",
+			"message": "The passkey did not respond within the signing deadline.",
 		})
 	default:
 		ServerError(w, nil)
