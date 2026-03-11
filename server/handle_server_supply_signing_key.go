@@ -1,13 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -26,13 +30,19 @@ type SupplySigningKeyRequest struct {
 	// AttestationObject is the base64url-encoded attestationObject CBOR from
 	// the AuthenticatorAttestationResponse.
 	AttestationObject string `json:"attestationObject" validate:"required"`
+	// RotationKeys, if provided, sets the rotation keys for the PLC operation.
+	// When recreating a passkey, the client must include the current rotation
+	// keys from the signed PLC operation returned by signPlcOperation.
+	RotationKeys []string `json:"rotationKeys"`
 }
 
 type SupplySigningKeyResponse struct {
-	Did          string `json:"did"`
-	PublicKey    string `json:"publicKey"`    // did:key for atproto (commit signing, passkey)
-	ServiceKey   string `json:"serviceKey"`   // did:key for atproto_service (service-auth, PDS server key)
-	CredentialID string `json:"credentialId"` // base64url credential ID
+	Did             string   `json:"did"`
+	PublicKey       string   `json:"publicKey"`       // did:key for atproto (commit signing, passkey)
+	ServiceKey      string   `json:"serviceKey"`      // did:key for atproto_service (service-auth, PDS server key)
+	CredentialID    string   `json:"credentialId"`    // base64url credential ID
+	RotationKeys    []string `json:"rotationKeys"`    // new rotation keys after the operation
+	SignedOperation *plc.Operation `json:"signedOperation,omitempty"` // signed PLC operation (when passkey signs)
 }
 
 // handleSupplySigningKey registers a WebAuthn passkey for the authenticated
@@ -108,6 +118,8 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Update the PLC DID document with the two-key structure.
+	var signedOp *plc.Operation
+	var newRotationKeys []string
 	if strings.HasPrefix(repo.Repo.Did, "did:plc:") {
 		log, err := identity.FetchDidAuditLog(ctx, nil, repo.Repo.Did)
 		if err != nil {
@@ -129,10 +141,19 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		// signed by this key; others fall back to #atproto (known limitation).
 		newVerificationMethods["atproto_service"] = pdsDIDKey
 
-		// Replace the PDS rotation key with the passkey's did:key. After this
-		// operation the PDS can no longer unilaterally modify the DID document
-		// — only the user's passkey can authorise future PLC operations.
-		newRotationKeys := []string{pubDIDKey}
+		// Determine whether the PDS rotation key still has authority over
+		// this DID. After the first passkey registration, the rotation key
+		// belongs to the user's passkey and the PDS can no longer sign.
+		pdsRotationDIDKey := s.plcClient.RotationDIDKey()
+		pdsCanSign := slices.Contains(latest.Operation.RotationKeys, pdsRotationDIDKey)
+
+		// Use client-provided rotation keys when recreating passkey (PDS can't sign),
+		// otherwise replace the PDS rotation key with the passkey's did:key.
+		if !pdsCanSign && len(req.RotationKeys) > 0 {
+			newRotationKeys = req.RotationKeys
+		} else {
+			newRotationKeys = []string{pubDIDKey}
+		}
 
 		op := plc.Operation{
 			Type:                "plc_operation",
@@ -143,13 +164,55 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 			Prev:                &latest.Cid,
 		}
 
-		// The PDS rotation key signs this PLC operation — this is the last
-		// PLC operation the PDS will ever be able to sign on behalf of the
-		// user. It is voluntarily handing over control to the passkey.
-		if err := s.plcClient.SignOp(&op); err != nil {
-			logger.Error("error signing PLC operation with rotation key", "error", err)
-			helpers.ServerError(w, nil)
-			return
+		if pdsCanSign {
+			// PDS still holds authority — sign directly. This is the last
+			// PLC operation the PDS will ever be able to sign on behalf of the
+			// user. It is voluntarily handing over control to the passkey.
+			if err := s.plcClient.SignOp(&op); err != nil {
+				logger.Error("error signing PLC operation with rotation key", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+		} else {
+			// Rotation key belongs to the user's existing passkey. Request
+			// signature via SignerHub, same as handleIdentityUpdateHandle.
+			opCBOR, err := op.MarshalCBOR()
+			if err != nil {
+				logger.Error("error marshalling PLC op to CBOR", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+
+			requestID := uuid.NewString()
+			expiresAt := time.Now().Add(signerRequestTimeout)
+
+			pendingOps := []PendingWriteOp{
+				{
+					Type:       "plc_operation",
+					Collection: "identity",
+					Rkey:       "supply_signing_key",
+				},
+			}
+
+			payloadB64 := base64.RawURLEncoding.EncodeToString(opCBOR)
+			msgBytes, err := buildSignRequestMsg(requestID, repo.Repo.Did, payloadB64, pendingOps, expiresAt)
+			if err != nil {
+				logger.Error("error building sign request message", "error", err)
+				helpers.ServerError(w, nil)
+				return
+			}
+
+			signCtx, cancel := context.WithDeadline(r.Context(), expiresAt)
+			defer cancel()
+
+			sigBytes, err := s.signerHub.RequestSignature(signCtx, repo.Repo.Did, requestID, msgBytes)
+			if helpers.HandleSignerError(w, err) {
+				logger.Error("signer error during passkey recreation", "did", repo.Repo.Did, "error", err)
+				return
+			}
+
+			op.Sig = base64.RawURLEncoding.EncodeToString(sigBytes)
+			signedOp = &op
 		}
 
 		if err := s.plcClient.SendOperation(ctx, repo.Repo.Did, &op); err != nil {
@@ -182,9 +245,11 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 	)
 
 	s.writeJSON(w, 200, SupplySigningKeyResponse{
-		Did:          repo.Repo.Did,
-		PublicKey:    pubDIDKey,
-		ServiceKey:   pdsDIDKey,
-		CredentialID: base64.RawURLEncoding.EncodeToString(credentialID),
+		Did:             repo.Repo.Did,
+		PublicKey:        pubDIDKey,
+		ServiceKey:       pdsDIDKey,
+		CredentialID:     base64.RawURLEncoding.EncodeToString(credentialID),
+		RotationKeys:     newRotationKeys,
+		SignedOperation:  signedOp,
 	})
 }
