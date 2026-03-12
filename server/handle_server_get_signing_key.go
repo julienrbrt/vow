@@ -39,12 +39,12 @@ func (s *Server) handleGetSigningKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(repo.PublicKey) == 0 {
+	if len(repo.SigningPublicKey) == 0 {
 		helpers.InputError(w, new("no signing key registered for this account"))
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(repo.SigningPublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

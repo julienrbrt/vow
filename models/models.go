@@ -20,9 +20,10 @@ type Repo struct {
 	AccountDeleteCode              *string
 	AccountDeleteCodeExpiresAt     *time.Time
 	Password                       string
-	// PublicKey holds the compressed P-256 (secp256r1) public key bytes for
-	// the account. This is the only key material the PDS retains.
-	PublicKey []byte
+	// AuthPublicKey holds the compressed P-256 public key bytes for WebAuthn assertion verification.
+	AuthPublicKey []byte
+	// SigningPublicKey holds the compressed P-256 public key bytes for commit signature verification.
+	SigningPublicKey []byte
 	// CredentialID is the WebAuthn credential ID returned by the authenticator
 	// during registration. It is stored so the server can build the
 	// allowCredentials list when requesting an assertion from the passkey.

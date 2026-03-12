@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	"golang.org/x/crypto/hkdf"
 	"github.com/fxamacker/cbor/v2"
 )
 
@@ -333,4 +335,16 @@ func decompressP256(compressed []byte) (*ecdsa.PublicKey, error) {
 	}
 
 	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+}
+
+// deriveSigningKey deterministically derives a P-256 private key from the
+// WebAuthn PRF output using HKDF-SHA256.
+func deriveSigningKey(prfOutput []byte) (*atcrypto.PrivateKeyP256, error) {
+	kdf := hkdf.New(sha256.New, prfOutput, nil, []byte("Vow PDS Commit Signing Key Derivation"))
+	keyBytes := make([]byte, 32)
+	if _, err := kdf.Read(keyBytes); err != nil {
+		return nil, fmt.Errorf("hkdf read: %w", err)
+	}
+
+	return atcrypto.ParsePrivateBytesP256(keyBytes)
 }

@@ -29,6 +29,8 @@ type SupplySigningKeyRequest struct {
 	// AttestationObject is the base64url-encoded attestationObject CBOR from
 	// the AuthenticatorAttestationResponse.
 	AttestationObject string `json:"attestationObject" validate:"required"`
+	// PrfOutput is the base64url-encoded PRF output.
+	PrfOutput string `json:"prfOutput" validate:"required"`
 }
 
 type SupplySigningKeyResponse struct {
@@ -95,10 +97,30 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate the compressed key is a well-formed P-256 point.
-	pubKey, err := atcrypto.ParsePublicBytesP256(keyBytes)
+	_, err = atcrypto.ParsePublicBytesP256(keyBytes)
 	if err != nil {
 		logger.Error("compressed P-256 key rejected by atcrypto", "error", err)
 		helpers.InputError(w, new("invalid P-256 public key in attestation"))
+		return
+	}
+
+	prfOutput, err := base64.RawURLEncoding.DecodeString(req.PrfOutput)
+	if err != nil {
+		logger.Error("error decoding prf output", "error", err)
+		helpers.InputError(w, new("invalid prf output encoding"))
+		return
+	}
+
+	privKey, err := deriveSigningKey(prfOutput)
+	if err != nil {
+		logger.Error("failed to derive signing key", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+	pubKey, err := privKey.PublicKey()
+	if err != nil {
+		logger.Error("failed to get public key from private key", "error", err)
+		helpers.ServerError(w, nil)
 		return
 	}
 
@@ -151,7 +173,7 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 
 		// If no passkey is registered yet, PDS signs (initial registration).
 		// Otherwise, the existing passkey signs (passkey rotation).
-		if len(repo.PublicKey) == 0 {
+		if len(repo.SigningPublicKey) == 0 {
 			// PDS still holds authority — sign directly. This is the last
 			// PLC operation the PDS will ever be able to sign on behalf of the
 			// user. It is voluntarily handing over control to the passkey.
@@ -210,8 +232,8 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 
 	// Persist the compressed P-256 public key and credential ID.
 	if err := s.db.Exec(ctx,
-		"UPDATE repos SET public_key = ?, credential_id = ? WHERE did = ?",
-		nil, keyBytes, credentialID, repo.Repo.Did,
+		"UPDATE repos SET auth_public_key = ?, signing_public_key = ?, credential_id = ? WHERE did = ?",
+		nil, keyBytes, pubKey.Bytes(), credentialID, repo.Repo.Did,
 	).Error; err != nil {
 		logger.Error("error updating public key and credential ID in db", "error", err)
 		helpers.ServerError(w, nil)

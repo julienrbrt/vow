@@ -57,12 +57,12 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 	//   4. The operation was signed by one of the current rotation keys (enforced
 	//      by plc.directory on submission, not re-checked here).
 
-	if len(repo.PublicKey) == 0 {
+	if len(repo.SigningPublicKey) == 0 {
 		helpers.InputError(w, new("no signing key registered for this account"))
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(repo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(repo.SigningPublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

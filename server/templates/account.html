@@ -313,6 +313,20 @@
                     options.challenge = base64urlToBytes(options.challenge);
                     options.user.id = base64urlToBytes(options.user.id);
 
+                    // Add PRF extension to create the signing key
+                    // We use a fixed salt so the derived key is always the same.
+                    const prfSalt = new Uint8Array(
+                        await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode("Vow PDS Commit Signing Key Derivation"))
+                    );
+                    
+                    options.extensions = {
+                        prf: {
+                            eval: {
+                                first: prfSalt
+                            }
+                        }
+                    };
+
                     // 2. Create the passkey.
                     btn.textContent = "Confirm with your passkey…";
                     const credential = await navigator.credentials.create({
@@ -323,7 +337,15 @@
                         throw new Error("Passkey creation was cancelled.");
                     }
 
-                    // 3. Send the attestation response to the server.
+                    // 3. Extract PRF output
+                    const extResults = credential.getClientExtensionResults();
+                    if (!extResults.prf || !extResults.prf.results || !extResults.prf.results.first) {
+                        throw new Error("Passkey doesn't support PRF extension. Use a modern browser (e.g. Chrome 126+, Safari 18+).");
+                    }
+                    const prfOutput = new Uint8Array(extResults.prf.results.first);
+                    localStorage.setItem("vow_prf_output", bytesToBase64url(prfOutput));
+
+                    // 4. Send the attestation response to the server.
                     btn.textContent = "Registering…";
                     const res = await fetch("/account/supply-signing-key", {
                         method: "POST",
@@ -339,6 +361,7 @@
                                     credential.response.attestationObject,
                                 ),
                             ),
+                            prfOutput: bytesToBase64url(prfOutput),
                         }),
                     });
 
@@ -724,6 +747,7 @@
                         signature: bytesToBase64url(
                             new Uint8Array(assertionResponse.signature),
                         ),
+                        prfOutput: localStorage.getItem("vow_prf_output"),
                     });
                 }
 

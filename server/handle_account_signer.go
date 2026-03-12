@@ -22,7 +22,7 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 	did := repo.Repo.Did
 
 	// Require a public key.
-	if len(repo.PublicKey) == 0 {
+	if len(repo.AuthPublicKey) == 0 {
 		http.Error(w, "no signing key registered for this account", http.StatusBadRequest)
 		return
 	}
@@ -120,7 +120,7 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 				}
 				delete(pendingPayloads, in.RequestID)
 
-				rawSig, err := verifyWebAuthnSignResponse(repo.PublicKey, payload, in, s.config.Hostname, logger)
+				rawSig, err := verifyWebAuthnSignResponse(repo.AuthPublicKey, repo.SigningPublicKey, payload, in, s.config.Hostname, logger)
 				if err != nil {
 					logger.Warn("signer: sign_response verification failed", "did", did, "requestId", in.RequestID, "error", err)
 					continue

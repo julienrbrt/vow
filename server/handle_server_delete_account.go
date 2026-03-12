@@ -176,7 +176,7 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 
 	// The account must have a registered passkey; without it there is nothing
 	// to verify against.
-	if len(repo.PublicKey) == 0 {
+	if len(repo.AuthPublicKey) == 0 {
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":   "NoSigningKey",
 			"message": "No passkey is registered for this account. Please register a passkey first.",
@@ -226,7 +226,7 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 	// verifyAssertion checks the challenge, rpIdHash, UP flag, and P-256
 	// signature. It also returns the raw (r‖s) bytes, which we discard here.
 	if _, err := verifyAssertion(
-		repo.PublicKey,
+		repo.AuthPublicKey,
 		sum[:],
 		clientDataJSONBytes,
 		authenticatorDataBytes,

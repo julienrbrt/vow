@@ -39,7 +39,7 @@ func (s *Server) handlePasskeyAssertionChallenge(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if len(repo.PublicKey) == 0 {
+	if len(repo.AuthPublicKey) == 0 {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":   "NoSigningKey",
 			"message": "No passkey is registered for this account.",

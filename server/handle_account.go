@@ -76,7 +76,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	if err := s.renderTemplate(w, "account.html", map[string]any{
 		"Handle":        repo.Handle,
 		"Did":           repo.Repo.Did,
-		"HasSigningKey": len(repo.PublicKey) > 0,
+		"HasSigningKey": len(repo.SigningPublicKey) > 0,
 		"CredentialID":  credentialID,
 		"Tokens":        tokenInfo,
 		"flashes":       s.getFlashesFromSession(w, r, sess),

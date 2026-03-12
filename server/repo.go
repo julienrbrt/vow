@@ -595,11 +595,11 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 	}
 
 	// ── Phase 4: verify the signature ─────────────────────────────────────
-	if len(urepo.PublicKey) == 0 {
+	if len(urepo.SigningPublicKey) == 0 {
 		return nil, fmt.Errorf("no public key registered for account %s", urepo.Did)
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(urepo.PublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesP256(urepo.SigningPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing stored public key: %w", err)
 	}

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -53,6 +55,7 @@ type wsIncoming struct {
 	AuthenticatorData string `json:"authenticatorData,omitempty"` // base64url
 	ClientDataJSON    string `json:"clientDataJSON,omitempty"`    // base64url
 	Signature         string `json:"signature,omitempty"`         // base64url DER-encoded ECDSA
+	PrfOutput         string `json:"prfOutput,omitempty"`         // base64url
 }
 
 // handleSignerConnect upgrades the connection to a WebSocket and registers it
@@ -88,7 +91,7 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Ensure the account actually has a public key registered before accepting
 	// a signer connection; without it no signature can ever be verified.
-	if len(repo.PublicKey) == 0 {
+	if len(repo.AuthPublicKey) == 0 {
 		helpers.InputError(w, new("no signing key registered for this account"))
 		return
 	}
@@ -222,7 +225,7 @@ func (s *Server) handleSignerConnect(w http.ResponseWriter, r *http.Request) {
 				}
 				delete(pendingPayloads, in.RequestID)
 
-				rawSig, err := verifyWebAuthnSignResponse(repo.PublicKey, payload, in, s.config.Hostname, logger)
+				rawSig, err := verifyWebAuthnSignResponse(repo.AuthPublicKey, repo.SigningPublicKey, payload, in, s.config.Hostname, logger)
 				if err != nil {
 					logger.Warn("signer: sign_response verification failed", "did", did, "requestId", in.RequestID, "error", err)
 					continue
@@ -317,7 +320,8 @@ func extractPayloadFromMsg(msg []byte) (string, error) {
 // sign_request (the raw CBOR bytes of the unsigned commit, or the SHA-256 of
 // the JWT signing input for service-auth tokens).
 func verifyWebAuthnSignResponse(
-	pubKey []byte,
+	authPubKey []byte,
+	signingPubKey []byte,
 	payloadB64 string,
 	in wsIncoming,
 	rpID string,
@@ -325,6 +329,10 @@ func verifyWebAuthnSignResponse(
 ) ([]byte, error) {
 	if in.AuthenticatorData == "" || in.ClientDataJSON == "" || in.Signature == "" {
 		return nil, helpers.ErrSignerNotConnected // reuse a sentinel; caller logs
+	}
+
+	if in.PrfOutput == "" {
+		return nil, fmt.Errorf("missing prfOutput in sign_response")
 	}
 
 	// The challenge passed to navigator.credentials.get() was the raw bytes
@@ -351,13 +359,41 @@ func verifyWebAuthnSignResponse(
 		return nil, err
 	}
 
-	rawSig, err := verifyAssertion(pubKey, expectedChallenge, clientDataJSONBytes, authenticatorDataBytes, signatureDER, rpID)
+	_, err = verifyAssertion(authPubKey, expectedChallenge, clientDataJSONBytes, authenticatorDataBytes, signatureDER, rpID)
 	if err != nil {
 		logger.With("rpID", rpID).Debug("verifyAssertion detail", "error", err)
 		return nil, err
 	}
 
-	return rawSig, nil
+	// Now derive the signing key from PRF output.
+	prfOutput, err := base64.RawURLEncoding.DecodeString(in.PrfOutput)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prfOutput encoding: %w", err)
+	}
+
+	privKey, err := deriveSigningKey(prfOutput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive signing key: %w", err)
+	}
+
+	pubKey, err := privKey.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get public key from private key: %w", err)
+	}
+
+	// Verify that the derived signing key matches the registered one.
+	if !bytes.Equal(pubKey.Bytes(), signingPubKey) {
+		return nil, fmt.Errorf("derived signing key does not match registered signing key")
+	}
+
+	// Sign the payload with the derived key.
+	// HashAndSign hashes the data using SHA-256 and produces a low-S signature.
+	commitSig, err := privKey.HashAndSign(expectedChallenge)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign payload: %w", err)
+	}
+
+	return commitSig, nil
 }
 
 // isTokenExpired returns true if the JWT's exp claim is in the past.

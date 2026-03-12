@@ -74,7 +74,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 
 		// If no passkey is registered yet, PDS signs. Otherwise, the user's
 		// passkey signs (it is the rotation key in Vow's model).
-		if len(repo.PublicKey) == 0 {
+		if len(repo.SigningPublicKey) == 0 {
 			// PDS still holds authority — sign directly.
 			if err := s.plcClient.SignOp(&op); err != nil {
 				logger.Error("error signing PLC operation with rotation key", "error", err)
