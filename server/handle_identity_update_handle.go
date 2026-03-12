@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -73,14 +72,9 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 			Prev:                &latest.Cid,
 		}
 
-		// Determine whether the PDS rotation key still has authority over
-		// this DID. After supplySigningKey transfers the rotation key to the
-		// user's passkey, the PDS key is no longer in the rotation key list
-		// and cannot sign PLC operations.
-		pdsRotationDIDKey := s.plcClient.RotationDIDKey()
-		pdsCanSign := slices.Contains(latest.Operation.RotationKeys, pdsRotationDIDKey)
-
-		if pdsCanSign {
+		// If no passkey is registered yet, PDS signs. Otherwise, the user's
+		// passkey signs (it is the rotation key in Vow's model).
+		if len(repo.PublicKey) == 0 {
 			// PDS still holds authority — sign directly.
 			if err := s.plcClient.SignOp(&op); err != nil {
 				logger.Error("error signing PLC operation with rotation key", "error", err)
@@ -88,9 +82,7 @@ func (s *Server) handleIdentityUpdateHandle(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		} else {
-			// Rotation key belongs to the user's passkey. Delegate the
-			// signing to the signer over WebSocket, same as
-			// handleSignPlcOperation does for other PLC operations.
+			// User has registered a passkey. Request signature via SignerHub.
 			opCBOR, err := op.MarshalCBOR()
 			if err != nil {
 				logger.Error("error marshalling PLC op to CBOR", "error", err)

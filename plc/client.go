@@ -139,17 +139,6 @@ func (c *Client) createDidCredentialsFromPublicKey(pubsigkey atcrypto.PublicKey,
 	return &creds, nil
 }
 
-// RotationDIDKey returns the PDS rotation key as a did:key string. This is
-// used to check whether the PDS still has authority over a DID by comparing
-// against the rotationKeys list in the current PLC document.
-func (c *Client) RotationDIDKey() string {
-	pub, err := c.rotationKey.PublicKey()
-	if err != nil {
-		return ""
-	}
-	return pub.DIDKey()
-}
-
 // RotationKeyBytes returns the raw bytes of the PDS rotation key. This allows
 // callers to use the rotation key to sign genesis commits instead of
 // generating a throwaway ephemeral key.
