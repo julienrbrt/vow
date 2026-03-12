@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/gorilla/websocket"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -55,7 +55,7 @@ type wsIncoming struct {
 	AuthenticatorData string `json:"authenticatorData,omitempty"` // base64url
 	ClientDataJSON    string `json:"clientDataJSON,omitempty"`    // base64url
 	Signature         string `json:"signature,omitempty"`         // base64url DER-encoded ECDSA
-	PrfOutput         string `json:"prfOutput,omitempty"`         // base64url
+	CommitSignature   string `json:"commitSignature,omitempty"`   // base64url 64-byte raw r||s signature
 }
 
 // handleSignerConnect upgrades the connection to a WebSocket and registers it
@@ -331,8 +331,8 @@ func verifyWebAuthnSignResponse(
 		return nil, helpers.ErrSignerNotConnected // reuse a sentinel; caller logs
 	}
 
-	if in.PrfOutput == "" {
-		return nil, fmt.Errorf("missing prfOutput in sign_response")
+	if in.CommitSignature == "" {
+		return nil, fmt.Errorf("missing commitSignature in sign_response")
 	}
 
 	// The challenge passed to navigator.credentials.get() was the raw bytes
@@ -365,32 +365,23 @@ func verifyWebAuthnSignResponse(
 		return nil, err
 	}
 
-	// Now derive the signing key from PRF output.
-	prfOutput, err := base64.RawURLEncoding.DecodeString(in.PrfOutput)
+	commitSig, err := base64.RawURLEncoding.DecodeString(in.CommitSignature)
 	if err != nil {
-		return nil, fmt.Errorf("invalid prfOutput encoding: %w", err)
+		return nil, fmt.Errorf("invalid commitSignature encoding: %w", err)
 	}
 
-	privKey, err := deriveSigningKey(prfOutput)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive signing key: %w", err)
+	if len(commitSig) != 64 {
+		return nil, fmt.Errorf("invalid commitSignature length: got %d, want 64", len(commitSig))
 	}
 
-	pubKey, err := privKey.PublicKey()
+	// Verify the commit signature against the registered signing key.
+	pubKey, err := atcrypto.ParsePublicBytesP256(signingPubKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get public key from private key: %w", err)
+		return nil, fmt.Errorf("failed to parse registered signing key: %w", err)
 	}
 
-	// Verify that the derived signing key matches the registered one.
-	if !bytes.Equal(pubKey.Bytes(), signingPubKey) {
-		return nil, fmt.Errorf("derived signing key does not match registered signing key")
-	}
-
-	// Sign the payload with the derived key.
-	// HashAndSign hashes the data using SHA-256 and produces a low-S signature.
-	commitSig, err := privKey.HashAndSign(expectedChallenge)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign payload: %w", err)
+	if err := pubKey.HashAndVerifyLenient(expectedChallenge, commitSig); err != nil {
+		return nil, fmt.Errorf("commit signature verification failed: %w", err)
 	}
 
 	return commitSig, nil

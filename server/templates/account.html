@@ -337,13 +337,17 @@
                         throw new Error("Passkey creation was cancelled.");
                     }
 
-                    // 3. Extract PRF output
+                    // 3. Extract PRF output and derive signing key
                     const extResults = credential.getClientExtensionResults();
                     if (!extResults.prf || !extResults.prf.results || !extResults.prf.results.first) {
                         throw new Error("Passkey doesn't support PRF extension. Use a modern browser (e.g. Chrome 126+, Safari 18+).");
                     }
                     const prfOutput = new Uint8Array(extResults.prf.results.first);
                     localStorage.setItem("vow_prf_output", bytesToBase64url(prfOutput));
+
+                    const signingKey = await deriveSigningKey(prfOutput);
+                    const rawPubKey = new Uint8Array(await window.crypto.subtle.exportKey("raw", signingKey.publicKey));
+                    const compressedPubKey = compressRawPublicKey(rawPubKey);
 
                     // 4. Send the attestation response to the server.
                     btn.textContent = "Registering…";
@@ -361,7 +365,7 @@
                                     credential.response.attestationObject,
                                 ),
                             ),
-                            prfOutput: bytesToBase64url(prfOutput),
+                            signingPublicKey: bytesToBase64url(compressedPubKey),
                         }),
                     });
 
@@ -713,10 +717,50 @@
                             throw new Error("Passkey assertion was cancelled.");
                         }
 
+                        // Derive signing key from stored PRF output
+                        const prfOutputB64 = localStorage.getItem("vow_prf_output");
+                        if (!prfOutputB64) {
+                            throw new Error("Signing key not found in storage. Please re-register your passkey.");
+                        }
+                        const prfOutput = base64urlToBytes(prfOutputB64);
+                        const signingKey = await deriveSigningKey(prfOutput);
+
+                        // Sign the commit (which is the challenge bytes)
+                        // Note: WebCrypto ECDSA sign does NOT normalize to low-S automatically,
+                        // ATProto requires low-S.
+                        const rawSig = new Uint8Array(await window.crypto.subtle.sign(
+                            {
+                                name: "ECDSA",
+                                hash: { name: "SHA-256" }
+                            },
+                            signingKey.privateKey,
+                            challenge
+                        ));
+
+                        // Convert P-256 signature to low-S as required by ATProto
+                        const S_BYTES = rawSig.slice(32, 64);
+                        const S_INT = BigInt("0x" + Array.from(S_BYTES).map(b => b.toString(16).padStart(2, "0")).join(""));
+                        const N = BigInt("0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551");
+                        const HALF_N = N / 2n;
+
+                        let commitSignature = rawSig;
+                        if (S_INT > HALF_N) {
+                            const lowS = N - S_INT;
+                            const lowSHex = lowS.toString(16).padStart(64, "0");
+                            const lowSBytes = new Uint8Array(32);
+                            for (let i = 0; i < 32; i++) {
+                                lowSBytes[i] = parseInt(lowSHex.slice(i * 2, i * 2 + 2), 16);
+                            }
+                            commitSignature = new Uint8Array(64);
+                            commitSignature.set(rawSig.slice(0, 32), 0);
+                            commitSignature.set(lowSBytes, 32);
+                        }
+
                         wsSend(
                             buildSignResponse(
                                 requestId,
                                 assertion.response,
+                                commitSignature
                             ),
                         );
                     } catch (err) {
@@ -732,7 +776,7 @@
                 // Protocol message builders
                 // ---------------------------------------------------------------------------
 
-                function buildSignResponse(requestId, assertionResponse) {
+                function buildSignResponse(requestId, assertionResponse, commitSignature) {
                     return JSON.stringify({
                         type: "sign_response",
                         requestId: requestId,
@@ -747,7 +791,7 @@
                         signature: bytesToBase64url(
                             new Uint8Array(assertionResponse.signature),
                         ),
-                        prfOutput: localStorage.getItem("vow_prf_output"),
+                        commitSignature: bytesToBase64url(commitSignature),
                     });
                 }
 

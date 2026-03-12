@@ -29,8 +29,9 @@ type SupplySigningKeyRequest struct {
 	// AttestationObject is the base64url-encoded attestationObject CBOR from
 	// the AuthenticatorAttestationResponse.
 	AttestationObject string `json:"attestationObject" validate:"required"`
-	// PrfOutput is the base64url-encoded PRF output.
-	PrfOutput string `json:"prfOutput" validate:"required"`
+	// SigningPublicKey is the base64url-encoded compressed P-256 public key
+	// derived via the PRF extension.
+	SigningPublicKey string `json:"signingPublicKey" validate:"required"`
 }
 
 type SupplySigningKeyResponse struct {
@@ -104,23 +105,17 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	prfOutput, err := base64.RawURLEncoding.DecodeString(req.PrfOutput)
+	signingKeyBytes, err := base64.RawURLEncoding.DecodeString(req.SigningPublicKey)
 	if err != nil {
-		logger.Error("error decoding prf output", "error", err)
-		helpers.InputError(w, new("invalid prf output encoding"))
+		logger.Error("error decoding signing public key", "error", err)
+		helpers.InputError(w, new("invalid signing public key encoding"))
 		return
 	}
 
-	privKey, err := deriveSigningKey(prfOutput)
+	pubKey, err := atcrypto.ParsePublicBytesP256(signingKeyBytes)
 	if err != nil {
-		logger.Error("failed to derive signing key", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-	pubKey, err := privKey.PublicKey()
-	if err != nil {
-		logger.Error("failed to get public key from private key", "error", err)
-		helpers.ServerError(w, nil)
+		logger.Error("derived signing key rejected by atcrypto", "error", err)
+		helpers.InputError(w, new("invalid derived P-256 public key"))
 		return
 	}
 
