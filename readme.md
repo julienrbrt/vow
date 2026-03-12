@@ -4,25 +4,9 @@
 > This is highly experimental software. Use with caution, especially during account migration.
 
 > [!IMPORTANT]
-> **Vow implements a two-key model for signing that requires a pending ATProto protocol change to be fully interoperable.**
->
-> ATProto uses a single DID document key (`verificationMethods.atproto`) for two distinct purposes: signing repo commits _and_ signing service-auth JWTs. Vow splits these into two separate keys:
->
-> - **`verificationMethods.atproto`** → the user's passkey. Signs every repo commit. Requires passkey usage, which is acceptable because commits are user-initiated.
-> - **`verificationMethods.atproto_service`** → the PDS server key. Signs service-auth JWTs for background requests (feed loading, notifications, proxied reads) without ever prompting the passkey.
->
-> [did-method-plc#101](https://github.com/did-method-plc/did-method-plc/pull/101) (merged June 2025) relaxed PLC directory constraints so DID documents can carry keys under arbitrary fragment names. Vow already writes both keys into the DID document during `supplySigningKey`.
->
-> **What remains blocked:** AppViews and relays in the reference implementation ([indigo](https://github.com/bluesky-social/indigo)) still call `identity.PublicKey()` → `GetPublicKey("atproto")` when verifying service-auth JWTs, so they will reject tokens signed by the PDS key with `BadJwtSignature`. A spec change adding an `#atproto_service` fallback is required. The RFC is [here](https://github.com/bluesky-social/atproto/discussions/4739). Until it lands in indigo and Bluesky's infrastructure, feeds, notifications, and proxied reads on standard ATProto clients will not work.
+> **Vow implements a two-key model for signing using WebAuthn PRF extension.** After registering a passkey, the server never stores a private signing key — the passkey authenticates and provides PRF output, from which a deterministic signing key is derived on-the-fly for each commit. Users fully control their DID.
 
-Vow is a Go PDS (Personal Data Server) for the AT Protocol.
-
-## Features
-
-- ✅ **IPFS storage** — repo blocks and blobs are stored on a local Kubo node and indexed in SQLite by DID and CID.
-- ✅ **Keyless PDS** — the server never stores a private key. Every write is signed by the user's passkey (WebAuthn/FIDO2) registered during onboarding.
-- ✅ **Browser signer** — the account page connects over WebSocket and signs repo commits and PLC operations with the user's passkey. No browser extension or extra software is needed; just keep the tab open. Standard ATProto clients do not need to know about it.
-- ✅ **User-controlled DID** — when the user registers a key, the PDS transfers the `did:plc` rotation key to the user's passkey-derived public key. After that, only the user can change their identity.
+Vow is a Go PDS (Personal Data Server) for AT Protocol.
 
 ## Quick Start with Docker Compose
 
@@ -33,69 +17,71 @@ Vow is a Go PDS (Personal Data Server) for the AT Protocol.
 
 ### Installation
 
-1. **Clone the repository**
+1. **Clone repository**
 
-   ```bash
-   git clone https://pkg.rbrt.fr/vow.git
-   cd vow
-   ```
+```bash
+git clone https://pkg.rbrt.fr/vow.git
+cd vow
+```
 
 2. **Create your configuration file**
 
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+cp .env.example .env
+```
 
 3. **Edit `.env` with your settings**
 
-   ```bash
-   VOW_DID="did:web:your-domain.com"
-   VOW_HOSTNAME="your-domain.com"
-   VOW_CONTACT_EMAIL="you@example.com"
-   VOW_RELAYS="https://bsky.network"
+```bash
+VOW_DID="did:web:your-domain.com"
+VOW_HOSTNAME="your-domain.com"
+VOW_CONTACT_EMAIL="you@example.com"
+VOW_RELAYS="https://bsky.network"
 
-   # Generate with: openssl rand -hex 16
-   VOW_ADMIN_PASSWORD="your-secure-password"
+# Generate with: openssl rand -hex 16
+VOW_ADMIN_PASSWORD="your-secure-password"
 
-   # Generate with: openssl rand -hex 32
-   VOW_SESSION_SECRET="your-session-secret"
-   ```
+# Generate with: openssl rand -hex 32
+VOW_SESSION_SECRET="your-session-secret"
+```
 
-4. **Start the services**
+4. **Start services**
 
-   ```bash
-   docker compose pull
-   docker compose up -d
-   ```
+```bash
+docker compose pull
+docker compose up -d
+```
 
-   This starts three services:
-   - **ipfs** — a Kubo node for repo blocks and blobs
-   - **vow** — the PDS
-   - **create-invite** — creates an initial invite code on first run
+This starts three services:
+
+- **ipfs** — a Kubo node for repo blocks and blobs
+- **vow** — the PDS
+- **create-invite** — creates an initial invite code on first run
 
 5. **Get your invite code**
 
-   On first run, an invite code is automatically created. View it with:
+On first run, an invite code is automatically created:
 
-   ```bash
-   docker compose logs create-invite
-   ```
+```bash
+docker compose logs create-invite
+```
 
-   Or check the saved file:
+Or check saved file:
 
-   ```bash
-   cat keys/initial-invite-code.txt
-   ```
+```bash
+cat keys/initial-invite-code.txt
+```
 
-6. **Monitor the services**
-   ```bash
-   docker compose logs -f
-   ```
+6. **Monitor services**
+
+```bash
+docker compose logs -f
+```
 
 ### What Gets Set Up
 
-- **init-keys**: Generates the rotation key and JWK on first run
-- **ipfs**: A Kubo node for repo blocks and blobs. The RPC API (port 5001) stays internal; the gateway (port 8080) is exposed on `127.0.0.1:8081` for your reverse proxy.
+- **init-keys**: Generates rotation key and JWK on first run
+- **ipfs**: A Kubo node for repo blocks and blobs. The RPC API (port 5001) stays internal; gateway (port 8080) is exposed on `127.0.0.1:8081` for your reverse proxy.
 - **vow**: The main PDS service on port 8080
 - **create-invite**: Creates an initial invite code on first run
 
@@ -123,7 +109,7 @@ Set `VOW_IPFS_GATEWAY_URL` to your public gateway URL so `sync.getBlob` redirect
 
 ### Database
 
-Vow uses SQLite for relational metadata such as accounts, sessions, record indexes, and tokens. No extra setup is required.
+Vow uses SQLite for relational metadata such as accounts, sessions, record indexes, and tokens.
 
 ```bash
 VOW_DB_NAME="/data/vow/vow.db"
@@ -131,18 +117,13 @@ VOW_DB_NAME="/data/vow/vow.db"
 
 ### IPFS Node
 
-In Docker Compose, the local Kubo node is configured automatically through the internal hostname `ipfs`. For bare-metal deployments, point vow at your local node:
-
 ```bash
-# URL of the Kubo RPC API
+# URL of Kubo RPC API
 VOW_IPFS_NODE_URL="http://127.0.0.1:5001"
 
-# Optional: redirect sync.getBlob to a public gateway instead of proxying
-# through vow. Set to your own gateway or a public one like https://ipfs.io
+# Optional: redirect sync.getBlob to a public gateway
 VOW_IPFS_GATEWAY_URL="https://ipfs.example.com"
 ```
-
-`VOW_IPFS_NODE_URL` is the only required IPFS setting.
 
 ### SMTP Email
 
@@ -159,144 +140,33 @@ VOW_SMTP_NAME="Vow PDS"
 
 The PDS holds two keys:
 
-- **Rotation key** (`rotation.key`) — a secp256k1 key used for DID genesis operations and for signing the PLC operation that transfers control to the user's passkey during `supplySigningKey`. It is never used to sign user content.
+- **Rotation key** (`rotation.key`) — used for DID genesis operations and for signing the PLC operation that transfers control to the user's passkey during passkey registration.
 - **JWK key** (`jwk.key`) — a P-256 ECDSA key used exclusively to sign ATProto session JWTs (access and refresh tokens) and OAuth tokens. It has no role in repo writes or identity operations.
 
 Neither key is ever used to sign repo commits or service-auth JWTs.
 
-Every repo write from the Bluesky app, Tangled, or any other standard ATProto client is held open until the user's passkey returns a signature through the browser signer on the account page.
-
-#### End-to-end signing flow
-
-Standard ATProto clients do not need to know about this flow. The PDS keeps the HTTP request open while it waits for the signature, then responds normally.
-
-```
-ATProto client          PDS (vow)                  Account page (browser)   Passkey (WebAuthn)
-      |                     |                               |                      |
-      |-- createRecord ----->|                               |                      |
-      |                     |-- 1. build unsigned commit     |                      |
-      |                     |-- 2. push signing request      |                      |
-      |                     |      over WebSocket ---------->|                      |
-      |   (HTTP held open,  |                               |-- navigator           |
-      |    up to 30 s)      |                               |   .credentials.get()->|
-      |                     |                               |<-- assertion ---------|
-      |                     |<-- 3. signature over WS -------|                      |
-      |                     |-- 4. verify signature          |                      |
-      |                     |-- 5. finalise & persist commit |                      |
-      |<-- 200 result -------|                               |                      |
-```
-
-**What requires a passkey signature:**
-
-Only operations that change the user's repo content, or identity operations after the user has taken ownership of their rotation key, need a passkey signature:
-
-- **Repo writes** — `createRecord`, `putRecord`, `deleteRecord`, `applyWrites`
-- **Identity operations** — PLC operations and handle updates, **once the user's passkey is the rotation key**. Before that, the PDS rotation key signs them directly.
-
-Read-only operations (browsing feeds, loading profiles, fetching notifications, etc.) do **not** prompt the passkey. Service-auth JWTs for proxied requests (`getServiceAuth`, ATProto proxy) are signed by the PDS server key (`#atproto_service`) and require no passkey: the signer tab does not need to be open for these.
-
-#### WebSocket connection
-
-The account page connects with the session cookie set at sign-in:
-
-```
-GET /account/signer
-Cookie: <session-cookie>
-```
-
-The connection is upgraded to a WebSocket and kept alive with ping/pong. Only one active connection per DID is supported; a new connection replaces the old one. The connection stays open while the tab is open and reconnects automatically with exponential backoff if interrupted.
-
-A legacy Bearer-token endpoint is also available for programmatic clients:
-
-```
-GET /xrpc/com.atproto.server.signerConnect
-Authorization: Bearer <access-token>
-```
-
-**Signing request message (PDS → browser):**
-
-```json
-{
-  "type": "sign_request",
-  "requestId": "uuid",
-  "did": "did:plc:...",
-  "payload": "<base64url-encoded unsigned commit bytes>",
-  "ops": [
-    { "type": "create", "collection": "app.bsky.feed.post", "rkey": "3abc..." }
-  ],
-  "expiresAt": "2025-01-01T00:00:30Z"
-}
-```
-
-**Signature response message (browser → PDS):**
-
-```json
-{
-  "type": "sign_response",
-  "requestId": "uuid",
-  "authenticatorData": "<base64url authenticatorData bytes>",
-  "clientDataJSON": "<base64url clientDataJSON bytes>",
-  "signature": "<base64url DER-encoded ECDSA signature>"
-}
-```
-
-The server decodes all three fields, reconstructs the signed message as `authenticatorData ‖ SHA-256(clientDataJSON)`, verifies the P-256 signature, and converts the DER-encoded signature to the raw 64-byte (r‖s) format expected by ATProto before delivering it to the waiting write handler.
-
-**Rejection message (browser → PDS):**
-
-```json
-{
-  "type": "sign_reject",
-  "requestId": "uuid"
-}
-```
+## How It Works
 
 ### Browser-Based Signer
 
-The signer runs entirely in the PDS account page. No browser extension or extra software is needed. The user keeps the page open (a pinned tab works well) and signing happens automatically when the passkey is used.
+The account page (`/account`) connects over WebSocket and runs entirely in the browser. No browser extension or extra software is needed — the user just keeps the tab open and signs commits automatically when prompted.
 
-## Identity & DID Sovereignty
+### Key Flow
 
-Vow uses `did:plc` for full ATProto federation compatibility. AppViews, relays, and other PDSes can resolve DIDs through `plc.directory` without custom logic. The main difference from a standard PDS is **who controls the rotation key**.
+1. **Before passkey registration** — PDS controls DID with its rotation key
+2. **After passkey registration** — User's passkey becomes the rotation key, derived via WebAuthn PRF extension. Only the user can modify their DID.
+3. **Signing commits** — Passkey authenticates user and provides PRF output. A deterministic signing key is derived from PRF output and used to sign commits.
 
-### The problem with standard ATProto
+### Two-Key Model
 
-In a typical PDS, the server holds the `did:plc` rotation key. That means the operator can change the user's DID document, rotate signing keys, change service endpoints, or effectively hijack the identity. The user has to trust the operator not to do that.
+Vow implements a two-key model:
 
-### Vow's approach: trust-then-transfer
-
-Vow uses a two-phase model:
-
-**Phase 1 — Account creation.** `createAccount` works like standard ATProto: the PDS creates the `did:plc` with its own rotation key.
-
-**Phase 2 — Key registration.** When the user completes onboarding and calls `supplySigningKey`, a new passkey is created via the WebAuthn API (`navigator.credentials.create()`). The PDS receives the public key from the attestation response, then submits a PLC operation that makes the user's passkey-derived key both the signing key and the **only rotation key**, removing the PDS key from the DID document. After that, only the user's passkey can authorise future PLC operations. The PDS rotation key file is not destroyed — it continues to be used for DID genesis when new accounts register — but it no longer has any authority over this user's DID document.
-
-### What the user gets
-
-| Property                        | Before key registration                                 | After key registration                                                                                                      |
-| ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Who signs commits               | Nobody (no key registered)                              | User's passkey (`#atproto`)                                                                                                 |
-| Who signs service-auth JWTs     | PDS server key                                          | PDS server key (`#atproto_service`)                                                                                         |
-| Who controls the DID            | PDS rotation key                                        | User's passkey-derived key                                                                                                  |
-| PDS can hijack identity         | Yes                                                     | **No**                                                                                                                      |
-| User can migrate to new PDS     | Yes (If rotation key was set) & No (PDS must cooperate) | **Yes** (sign a PLC op to update serviceEndpoint)                                                                           |
-| Commit federation compatibility | Full                                                    | Full (unchanged)                                                                                                            |
-| Service-auth federation compat. | Full                                                    | Partial — requires [`#atproto_service` RFC](https://github.com/bluesky-social/atproto/discussions/4739) to land in AppViews |
-
-### Verifiability
-
-The transfer is publicly verifiable. The PLC audit log at `plc.directory` shows the full history of rotation key changes. After `supplySigningKey`, the log shows the PDS rotation key being replaced by the user's passkey-derived `did:key`.
-
-### Why passkeys instead of Ethereum wallets?
-
-The original Vow design used Ethereum wallets (MetaMask, Rabby, etc.) and `personal_sign` / EIP-191 for commit signing. In practice, verifying Ethereum-style message hashes against ATProto's expected signature format proved unreliable — the EIP-191 prefix and keccak256 hashing are incompatible with how ATProto verifiers check secp256k1 signatures.
-
-Passkeys (WebAuthn/FIDO2) solve this:
-
-- **No browser extension required** — passkeys are built into every modern browser and OS.
-- **Hardware-backed security** — the private key lives in a secure enclave (TPM, Secure Enclave, or a roaming authenticator like a YubiKey). It never leaves the device.
-- **Familiar UX** — users authenticate with a fingerprint, face scan, or PIN instead of confirming a cryptographic message in a wallet popup.
-- **Correct signature format** — the passkey signs repo commits with P-256 ECDSA in the raw (r‖s) format ATProto expects. Service-auth JWTs are signed by the PDS server key (`#atproto_service`) so they are standard ES256 and require no passkey. See the limitation notice at the top of this document for the remaining interoperability gap.
+| Property               | PDS Server Key     | Passkey-Derived Key         |
+| ---------------------- | ------------------ | --------------------------- |
+| **DID slot**           | `#atproto_service` | `#atproto`                  |
+| **Purpose**            | Service-auth JWTs  | Repo commits                |
+| **Passkey required**   | No                 | Yes (for repo writes)       |
+| **Private key stored** | Yes (in `jwk.key`) | **No** (derived on-the-fly) |
 
 ## Management Commands
 
@@ -376,7 +246,6 @@ docker compose up -d
 - [x] `com.atproto.sync.getRepoStatus`
 - [x] `com.atproto.sync.getRepo`
 - [x] `com.atproto.sync.listBlobs`
-- [x] `com.atproto.sync.listRepos`
 - [x] `com.atproto.sync.requestCrawl`
 - [x] `com.atproto.sync.subscribeRepos`
 
@@ -389,7 +258,7 @@ docker compose up -d
 
 ## License
 
-[MIT](license). `server/static/pico.css` is also MIT licensed, available at [https://github.com/picocss/pico/](https://github.com/picocss/pico/).
+[MIT](license). `server/static/pico.css` is also MIT licensed, available at [https://github.com/picocss/pico](https://github.com/picocss/pico).
 
 ## Thanks
 
@@ -404,10 +273,12 @@ Vow is based on [Cocoon](https://tangled.org/hailey.at/cocoon). Many thanks for 
 | SQLite blockstore       | ❌ removed | ✅     |
 | PostgreSQL support      | ❌ removed | ✅     |
 | S3 blob storage         | ❌ removed | ✅     |
-| S3 database backups     | ❌ removed | ✅     |
-| IPFS blob storage       | ✅ (Kubo)  | ❌     |
 | IPFS repo block storage | ✅ (Kubo)  | ❌     |
+| IPFS blob storage       | ✅ (Kubo)  | ❌     |
 | Email 2FA               | ❌ removed | ✅     |
 | BYOK (keyless PDS)      | ✅         | ❌     |
 | Passkey signer          | ✅         | ❌     |
-| User-sovereign DID      | ✅         | ❌     |
+
+## Technical Details
+
+For in-depth specifications, flows, trade-offs, and maintenance considerations, see [specs.md](specs.md).
