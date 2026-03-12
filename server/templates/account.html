@@ -234,7 +234,9 @@
             </div>
         </main>
 
-        <script>
+        <script type="module">
+            import { p256 } from 'https://esm.sh/@noble/curves@1.2.0/p256';
+
             // ---------------------------------------------------------------------------
             // Utilities
             // ---------------------------------------------------------------------------
@@ -259,6 +261,77 @@
                     out[i] = raw.charCodeAt(i);
                 }
                 return out;
+            }
+
+            async function deriveSigningKey(prfOutput) {
+                const keyMaterial = await window.crypto.subtle.importKey(
+                    "raw",
+                    prfOutput,
+                    "HKDF",
+                    false,
+                    ["deriveBits"]
+                );
+
+                const derivedBits = await window.crypto.subtle.deriveBits(
+                    {
+                        name: "HKDF",
+                        hash: "SHA-256",
+                        salt: new TextEncoder().encode("Vow PDS Signing Key"),
+                        info: new TextEncoder().encode("P-256")
+                    },
+                    keyMaterial,
+                    256
+                );
+
+                const privateKeyBytes = new Uint8Array(derivedBits);
+                
+                // Use noble-curves to derive public key from private scalar
+                const pubPoint = p256.getPublicKey(privateKeyBytes, false);
+                const xBytes = pubPoint.slice(1, 33);
+                const yBytes = pubPoint.slice(33, 65);
+
+                // Build JWK for import
+                const jwk = {
+                    kty: "EC",
+                    crv: "P-256",
+                    d: bytesToBase64url(privateKeyBytes),
+                    x: bytesToBase64url(xBytes),
+                    y: bytesToBase64url(yBytes),
+                    ext: true
+                };
+
+                const privateKey = await window.crypto.subtle.importKey(
+                    "jwk",
+                    jwk,
+                    { name: "ECDSA", namedCurve: "P-256" },
+                    true,
+                    ["sign"]
+                );
+
+                const rawPublicKey = new Uint8Array(65);
+                rawPublicKey[0] = 0x04;
+                rawPublicKey.set(xBytes, 1);
+                rawPublicKey.set(yBytes, 33);
+
+                const publicKey = await window.crypto.subtle.importKey(
+                    "raw",
+                    rawPublicKey,
+                    { name: "ECDSA", namedCurve: "P-256" },
+                    true,
+                    ["verify"]
+                );
+
+                return { privateKey, publicKey };
+            }
+
+            function compressRawPublicKey(rawKey) {
+                if (rawKey.length !== 65) {
+                    throw new Error("Expected 65-byte uncompressed public key");
+                }
+                const compressed = new Uint8Array(33);
+                compressed[0] = rawKey[64] % 2 === 0 ? 0x02 : 0x03;
+                compressed.set(rawKey.slice(1, 33), 1);
+                return compressed;
             }
 
             // ---------------------------------------------------------------------------
