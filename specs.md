@@ -23,7 +23,7 @@ CREATE TABLE repos (
     created_at DATETIME,
     email TEXT UNIQUE,
     auth_public_key BLOB,           -- Passkey P-256 public key (for WebAuthn assertion verification)
-    signing_public_key BLOB,         -- PRF-derived P-256 signing key (for commit signature verification)
+    signing_public_key BLOB,         -- PRF-derived secp256k1 signing key (for commit signature verification)
     credential_id BLOB,              -- WebAuthn credential ID (for building allowCredentials list)
     rev TEXT,
     root BLOB,
@@ -34,11 +34,11 @@ CREATE TABLE repos (
 
 ### Key Types
 
-| Key                     | Type      | Curve                             | Purpose                    | Stored |
-| ----------------------- | --------- | --------------------------------- | -------------------------- | ------ |
+| Key                     | Type      | Purpose                           | Stored                     |
+| ----------------------- | --------- | --------------------------------- | -------------------------- |
 | `auth_public_key`       | P-256     | WebAuthn assertion verification   | ✅ Yes                     |
-| `signing_public_key`    | P-256     | Commit signature verification     | ✅ Yes                     |
-| PRF-derived private key | P-256     | Commit signing                    | ❌ No (derived on-the-fly) |
+| `signing_public_key`    | secp256k1 | Commit signature verification     | ✅ Yes                     |
+| PRF-derived private key | secp256k1 | Commit signing                    | ❌ No (derived on-the-fly) |
 | PDS rotation key        | secp256k1 | PLC genesis, initial key transfer | ✅ Yes                     |
 | PDS service key         | P-256     | Session/OAuth JWT signing         | ✅ Yes                     |
 
@@ -296,34 +296,30 @@ Same PRF output produces the same signing key deterministically:
 
 ### Compatibility Gaps
 
-#### Service-Auth Federation Gap
+### Compat Mode
 
-**Problem:** Standard ATProto reference implementation and AppViews verify service-auth JWTs by checking `verificationMethods.atproto` only, ignoring `verificationMethods.atproto_service`.
+**Problem:** Standard ATProto reference implementation and AppViews verify service-auth JWTs by checking `verificationMethods.atproto` only, ignoring `verificationMethods.atproto_service`. Additionally, external AppViews (like official Bluesky) only accept ES256K (secp256k1) signed service-auth JWTs.
+
+**Solution:** Vow provides a "compat mode" that:
+
+1. Signs service-auth JWTs with the user's passkey-derived secp256k1 key (not the PDS P-256 key)
+2. Uses ES256K algorithm with `alg: "ES256K"` and `crv: "secp256k1"` in JWT header
+3. Requires browser interaction for each service-auth request (passkey assertion)
 
 **Current Status:**
 
 - ✅ Vow correctly sets `#atproto_service` in DID document
-- ✅ Vow correctly signs service-auth JWTs with that key
-- ❌ Standard clients reject these tokens with `BadJwtSignature`
+- ✅ Vow correctly signs service-auth JWTs with that key (non-compat mode)
+- ✅ Compat mode signs with secp256k1 key that external AppViews accept
+- ❌ Standard clients without compat mode reject tokens with `BadJwtSignature` until RFC is implemented.
 - ✅ Vow's own account page works (reads `#atproto_service`)
 
 **Impact:**
 
-- ❌ Background feed loading via standard clients fails
-- ❌ Notification streaming via standard clients fails
-- ❌ Proxied blob reads via standard clients fails
-- ✅ Direct API access works if clients check `#atproto_service`
-- ✅ Vow's built-in UI works fully
-
-**Tracking:** RFC Draft for atproto_service verification
-
-#### Mitigation for Users
-
-Until the RFC lands, users should:
-
-1. Use Vow's account page for full experience
-2. Build/custom clients that check `#atproto_service` as fallback
-3. Use direct API calls for automation
+- ✅ Compat mode: Background feed loading, notifications work with external AppViews
+- ⚠️ Compat mode UX: More frequent passkey approvals required
+- ❌ Non-compat mode: External AppViews reject service-auth tokens
+- ✅ Vow's built-in UI works fully regardless of mode
 
 ## Maintenance
 
@@ -363,7 +359,7 @@ Until the RFC lands, users should:
 The `repos` table structure is stable:
 
 - `auth_public_key` — Passkey P-256 public key
-- `signing_public_key` — PRF-derived P-256 signing key
+- `signing_public_key` — PRF-derived secp256k1 signing key
 - `credential_id` — WebAuthn credential ID
 
 **Upgrade path:**

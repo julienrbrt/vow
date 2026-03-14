@@ -146,6 +146,43 @@
             </div>
             {{ end }}
 
+            <!-- Compatibility Mode -->
+            {{ if .HasSigningKey }}
+            <div class="base-container" style="margin-bottom: 1.5em">
+                <h3>Compatibility Mode</h3>
+                <p>
+                    Enable this mode to sign your own JWT requests for classic
+                    app views. This is required for some apps to work correctly
+                    until the
+                    <a
+                        href="https://github.com/bluesky-social/atproto/discussions/4739"
+                        >related RFC</a
+                    >
+                    is merged.
+                </p>
+                <p>
+                    <small
+                        ><strong>Disclaimer:</strong> This will be spammy and
+                        may result in frequent passkey prompts.</small
+                    >
+                </p>
+
+                <div
+                    style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.75em;
+                        margin-bottom: 1em;
+                    "
+                >
+                    <input type="checkbox" id="compat-mode-checkbox" />
+                    <label for="compat-mode-checkbox"
+                        >Enable Compatibility Mode</label
+                    >
+                </div>
+            </div>
+            {{ end }}
+
             <!-- Active Sessions -->
             <div class="base-container" style="margin-bottom: 1.5em">
                 <h3>Active Sessions</h3>
@@ -236,7 +273,7 @@
         </main>
 
         <script type="module">
-            import { p256 } from 'https://esm.sh/@noble/curves@1.2.0/p256';
+            import { secp256k1 } from 'https://esm.sh/@noble/curves@1.2.0/secp256k1';
 
             // ---------------------------------------------------------------------------
             // Utilities
@@ -278,51 +315,18 @@
                         name: "HKDF",
                         hash: "SHA-256",
                         salt: new TextEncoder().encode("Vow PDS Signing Key"),
-                        info: new TextEncoder().encode("P-256")
+                        info: new TextEncoder().encode("K256")
                     },
                     keyMaterial,
                     256
                 );
 
                 const privateKeyBytes = new Uint8Array(derivedBits);
-                
-                // Use noble-curves to derive public key from private scalar
-                const pubPoint = p256.getPublicKey(privateKeyBytes, false);
-                const xBytes = pubPoint.slice(1, 33);
-                const yBytes = pubPoint.slice(33, 65);
 
-                // Build JWK for import
-                const jwk = {
-                    kty: "EC",
-                    crv: "P-256",
-                    d: bytesToBase64url(privateKeyBytes),
-                    x: bytesToBase64url(xBytes),
-                    y: bytesToBase64url(yBytes),
-                    ext: true
-                };
+                // Use noble-curves secp256k1 to get compressed public key
+                const compressedPubKey = secp256k1.getPublicKey(privateKeyBytes, true);
 
-                const privateKey = await window.crypto.subtle.importKey(
-                    "jwk",
-                    jwk,
-                    { name: "ECDSA", namedCurve: "P-256" },
-                    true,
-                    ["sign"]
-                );
-
-                const rawPublicKey = new Uint8Array(65);
-                rawPublicKey[0] = 0x04;
-                rawPublicKey.set(xBytes, 1);
-                rawPublicKey.set(yBytes, 33);
-
-                const publicKey = await window.crypto.subtle.importKey(
-                    "raw",
-                    rawPublicKey,
-                    { name: "ECDSA", namedCurve: "P-256" },
-                    true,
-                    ["verify"]
-                );
-
-                return { privateKey, publicKey };
+                return { privateKeyBytes, compressedPubKey };
             }
 
             function compressRawPublicKey(rawKey) {
@@ -334,6 +338,35 @@
                 compressed.set(rawKey.slice(1, 33), 1);
                 return compressed;
             }
+
+            (function () {
+                const checkbox = document.getElementById("compat-mode-checkbox");
+                if (!checkbox) return;
+
+                // Set initial state from the database value passed by the template.
+                const compatModeEnabled = {{.CompatMode}};
+                checkbox.checked = compatModeEnabled;
+
+                checkbox.addEventListener("change", async () => {
+                    const enabled = checkbox.checked;
+                    try {
+                        const resp = await fetch("/account/compat", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({ compat: enabled }),
+                        });
+                        if (!resp.ok) {
+                            throw new Error("Failed to save setting");
+                        }
+                    } catch (err) {
+                        console.error("Failed to update compat mode:", err);
+                        // Revert checkbox on failure
+                        checkbox.checked = !enabled;
+                    }
+                });
+            })();
 
             // ---------------------------------------------------------------------------
             // Passkey registration
@@ -392,7 +425,7 @@
                     const prfSalt = new Uint8Array(
                         await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode("Vow PDS Commit Signing Key Derivation"))
                     );
-                    
+
                     options.extensions = {
                         prf: {
                             eval: {
@@ -420,8 +453,6 @@
                     localStorage.setItem("vow_prf_output", bytesToBase64url(prfOutput));
 
                     const signingKey = await deriveSigningKey(prfOutput);
-                    const rawPubKey = new Uint8Array(await window.crypto.subtle.exportKey("raw", signingKey.publicKey));
-                    const compressedPubKey = compressRawPublicKey(rawPubKey);
 
                     // 4. Send the attestation response to the server.
                     btn.textContent = "Registering…";
@@ -439,7 +470,7 @@
                                     credential.response.attestationObject,
                                 ),
                             ),
-                            signingPublicKey: bytesToBase64url(compressedPubKey),
+                            signingPublicKey: bytesToBase64url(signingKey.compressedPubKey),
                         }),
                     });
 
@@ -716,6 +747,8 @@
 
                     if (msg.type === "sign_request") {
                         handleSignRequest(msg);
+                    } else if (msg.type === "sign_jwt_request") {
+                        handleSignJWTRequest(msg);
                     } else {
                         console.log(
                             "[vow/signer] unknown message type",
@@ -778,12 +811,23 @@
                               ]
                             : [];
 
+                        const prfSalt = new Uint8Array(
+                            await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode("Vow PDS Commit Signing Key Derivation"))
+                        );
+
                         const assertion = await navigator.credentials.get({
                             publicKey: {
                                 challenge,
                                 allowCredentials,
                                 timeout: 30000,
                                 userVerification: "preferred",
+                                extensions: {
+                                    prf: {
+                                        eval: {
+                                            first: prfSalt
+                                        }
+                                    }
+                                }
                             },
                         });
 
@@ -791,44 +835,25 @@
                             throw new Error("Passkey assertion was cancelled.");
                         }
 
-                        // Derive signing key from stored PRF output
-                        const prfOutputB64 = localStorage.getItem("vow_prf_output");
-                        if (!prfOutputB64) {
-                            throw new Error("Signing key not found in storage. Please re-register your passkey.");
+                        let prfOutput;
+                        const extResults = assertion.getClientExtensionResults();
+                        if (extResults.prf && extResults.prf.results && extResults.prf.results.first) {
+                            prfOutput = new Uint8Array(extResults.prf.results.first);
+                            localStorage.setItem("vow_prf_output", bytesToBase64url(prfOutput));
+                        } else {
+                            const prfOutputB64 = localStorage.getItem("vow_prf_output");
+                            if (!prfOutputB64) {
+                                throw new Error("Passkey did not return PRF output and no fallback found. Please re-register your passkey.");
+                            }
+                            prfOutput = base64urlToBytes(prfOutputB64);
                         }
-                        const prfOutput = base64urlToBytes(prfOutputB64);
                         const signingKey = await deriveSigningKey(prfOutput);
 
-                        // Sign the commit (which is the challenge bytes)
-                        // Note: WebCrypto ECDSA sign does NOT normalize to low-S automatically,
-                        // ATProto requires low-S.
-                        const rawSig = new Uint8Array(await window.crypto.subtle.sign(
-                            {
-                                name: "ECDSA",
-                                hash: { name: "SHA-256" }
-                            },
-                            signingKey.privateKey,
-                            challenge
-                        ));
-
-                        // Convert P-256 signature to low-S as required by ATProto
-                        const S_BYTES = rawSig.slice(32, 64);
-                        const S_INT = BigInt("0x" + Array.from(S_BYTES).map(b => b.toString(16).padStart(2, "0")).join(""));
-                        const N = BigInt("0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551");
-                        const HALF_N = N / 2n;
-
-                        let commitSignature = rawSig;
-                        if (S_INT > HALF_N) {
-                            const lowS = N - S_INT;
-                            const lowSHex = lowS.toString(16).padStart(64, "0");
-                            const lowSBytes = new Uint8Array(32);
-                            for (let i = 0; i < 32; i++) {
-                                lowSBytes[i] = parseInt(lowSHex.slice(i * 2, i * 2 + 2), 16);
-                            }
-                            commitSignature = new Uint8Array(64);
-                            commitSignature.set(rawSig.slice(0, 32), 0);
-                            commitSignature.set(lowSBytes, 32);
-                        }
+                        // Sign with secp256k1 (noble-curves handles low-S automatically)
+                        const hash = await window.crypto.subtle.digest("SHA-256", challenge);
+                        const hashBytes = new Uint8Array(hash);
+                        const sig = secp256k1.sign(hashBytes, signingKey.privateKeyBytes, { lowS: true });
+                        const commitSignature = sig.toCompactRawBytes();
 
                         wsSend(
                             buildSignResponse(
@@ -839,6 +864,111 @@
                         );
                     } catch (err) {
                         console.warn("[vow/signer] signing failed", err);
+                        wsSend(buildSignReject(requestId));
+                    } finally {
+                        pendingRequestId = null;
+                        hidePending();
+                    }
+                }
+
+                // ---------------------------------------------------------------------------
+                // sign_jwt_request — WebAuthn passkey assertion for JWT
+                // ---------------------------------------------------------------------------
+
+                async function handleSignJWTRequest(msg) {
+                    const { requestId, jwtPayload } = msg;
+
+                    if (!requestId || !jwtPayload) {
+                        console.warn(
+                            "[vow/signer] malformed sign_jwt_request",
+                            msg,
+                        );
+                        return;
+                    }
+
+                    if (pendingRequestId) {
+                        console.warn(
+                            "[vow/signer] already pending — rejecting",
+                            requestId,
+                        );
+                        wsSend(buildSignReject(requestId));
+                        return;
+                    }
+
+                    pendingRequestId = requestId;
+                    showPending(null); // No ops for JWTs
+                    showNotification(
+                        "Vow — Service Authentication",
+                        "An app is requesting authentication. Please confirm with your passkey.",
+                    );
+
+                    try {
+                        // The jwtPayload is base64url-encoded signing string (header.payload).
+                        // We decode it to get the raw bytes for the WebAuthn challenge.
+                        const challenge = base64urlToBytes(jwtPayload);
+
+                        const allowCredentials = credentialIdB64
+                            ? [
+                                  {
+                                      id: base64urlToBytes(credentialIdB64),
+                                      type: "public-key",
+                                  },
+                              ]
+                            : [];
+
+                        const prfSalt = new Uint8Array(
+                            await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode("Vow PDS Commit Signing Key Derivation"))
+                        );
+
+                        const assertion = await navigator.credentials.get({
+                            publicKey: {
+                                challenge,
+                                allowCredentials,
+                                timeout: 30000,
+                                userVerification: "preferred",
+                                extensions: {
+                                    prf: {
+                                        eval: {
+                                            first: prfSalt
+                                        }
+                                    }
+                                }
+                            },
+                        });
+
+                        if (!assertion) {
+                            throw new Error("Passkey assertion was cancelled.");
+                        }
+
+                        let prfOutput;
+                        const extResults = assertion.getClientExtensionResults();
+                        if (extResults.prf && extResults.prf.results && extResults.prf.results.first) {
+                            prfOutput = new Uint8Array(extResults.prf.results.first);
+                            localStorage.setItem("vow_prf_output", bytesToBase64url(prfOutput));
+                        } else {
+                            const prfOutputB64 = localStorage.getItem("vow_prf_output");
+                            if (!prfOutputB64) {
+                                throw new Error("Passkey did not return PRF output and no fallback found. Please re-register your passkey.");
+                            }
+                            prfOutput = base64urlToBytes(prfOutputB64);
+                        }
+                        const signingKey = await deriveSigningKey(prfOutput);
+
+                        // Sign with secp256k1 (noble-curves handles low-S automatically)
+                        const hash = await window.crypto.subtle.digest("SHA-256", challenge);
+                        const hashBytes = new Uint8Array(hash);
+                        const sig = secp256k1.sign(hashBytes, signingKey.privateKeyBytes, { lowS: true });
+                        const signature = sig.toCompactRawBytes();
+
+                        wsSend(
+                            buildSignResponse(
+                                requestId,
+                                assertion.response,
+                                signature
+                            ),
+                        );
+                    } catch (err) {
+                        console.error("[vow/signer] JWT signing failed", err, err.stack);
                         wsSend(buildSignReject(requestId));
                     } finally {
                         pendingRequestId = null;
@@ -869,6 +999,7 @@
                     });
                 }
 
+
                 function buildSignReject(requestId) {
                     return JSON.stringify({
                         type: "sign_reject",
@@ -879,6 +1010,7 @@
                 // ---------------------------------------------------------------------------
                 // Helpers
                 // ---------------------------------------------------------------------------
+
 
                 function opsToSummary(ops) {
                     if (!ops || ops.length === 0)

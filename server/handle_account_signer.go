@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -171,4 +172,23 @@ func (s *Server) handleAccountSigner(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// extractPayloadFromMsg extracts the base64url-encoded payload from a
+// sign_request or sign_jwt_request message.
+func extractPayloadFromMsg(msg []byte) (string, error) {
+	var req struct {
+		Payload    string `json:"payload"`
+		JWTPayload string `json:"jwtPayload"`
+	}
+	if err := json.Unmarshal(msg, &req); err != nil {
+		return "", err
+	}
+	if req.Payload != "" {
+		return req.Payload, nil
+	}
+	if req.JWTPayload != "" {
+		return req.JWTPayload, nil
+	}
+	return "", fmt.Errorf("no payload in sign_request")
 }

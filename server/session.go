@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -14,13 +17,41 @@ type Session struct {
 	RefreshToken string
 }
 
+func (s *Server) signInternalJWT(claims map[string]any) (string, error) {
+	header := map[string]string{
+		"alg": "ES256",
+		"typ": "JWT",
+	}
+	hj, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("marshaling header: %w", err)
+	}
+	encheader := base64.RawURLEncoding.EncodeToString(hj)
+
+	pj, err := json.Marshal(claims)
+	if err != nil {
+		return "", fmt.Errorf("marshaling payload: %w", err)
+	}
+	encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
+
+	signingString := fmt.Sprintf("%s.%s", encheader, encpayload)
+
+	sig, err := s.privateKeyATP.HashAndSign([]byte(signingString))
+	if err != nil {
+		return "", fmt.Errorf("signing failed: %w", err)
+	}
+
+	encsig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(sig), "=")
+	return signingString + "." + encsig, nil
+}
+
 func (s *Server) createSession(ctx context.Context, repo *models.Repo) (*Session, error) {
 	now := time.Now()
 	accexp := now.Add(3 * time.Hour)
 	refexp := now.Add(7 * 24 * time.Hour)
 	jti := uuid.NewString()
 
-	accessClaims := jwt.MapClaims{
+	accessClaims := map[string]any{
 		"scope": "com.atproto.access",
 		"aud":   s.config.Did,
 		"sub":   repo.Did,
@@ -29,13 +60,12 @@ func (s *Server) createSession(ctx context.Context, repo *models.Repo) (*Session
 		"jti":   jti,
 	}
 
-	accessToken := jwt.NewWithClaims(jwt.SigningMethodES256, accessClaims)
-	accessString, err := accessToken.SignedString(s.privateKey)
+	accessString, err := s.signInternalJWT(accessClaims)
 	if err != nil {
 		return nil, err
 	}
 
-	refreshClaims := jwt.MapClaims{
+	refreshClaims := map[string]any{
 		"scope": "com.atproto.refresh",
 		"aud":   s.config.Did,
 		"sub":   repo.Did,
@@ -44,8 +74,7 @@ func (s *Server) createSession(ctx context.Context, repo *models.Repo) (*Session
 		"jti":   jti,
 	}
 
-	refreshToken := jwt.NewWithClaims(jwt.SigningMethodES256, refreshClaims)
-	refreshString, err := refreshToken.SignedString(s.privateKey)
+	refreshString, err := s.signInternalJWT(refreshClaims)
 	if err != nil {
 		return nil, err
 	}

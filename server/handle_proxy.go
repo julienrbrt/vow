@@ -90,7 +90,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// exp=0 tells signServiceAuthJWT to use the default lifetime and
 		// cache the resulting token so repeated proxy calls for the same
 		// (aud, lxm) pair reuse it instead of prompting the passkey each time.
-		token, err := s.signServiceAuthJWT(r.Context(), repo, aud, lxm, 0)
+		var token string
+		var err error
+		if repo.CompatMode {
+			token, err = s.requestUserSignedServiceAuthJWT(r.Context(), repo, aud, lxm, 0)
+		} else {
+			token, err = s.signServiceAuthJWT(repo, aud, lxm, 0)
+		}
 		if helpers.HandleSignerError(w, err) {
 			logger.Error("error signing proxy JWT", "error", err)
 			return

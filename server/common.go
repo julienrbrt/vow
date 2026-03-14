@@ -3,8 +3,8 @@ package server
 import (
 	"context"
 
-	"pkg.rbrt.fr/vow/models"
 	"gorm.io/gorm"
+	"pkg.rbrt.fr/vow/models"
 )
 
 func (s *Server) getActorByHandle(ctx context.Context, handle string) (*models.Actor, error) {
@@ -31,7 +31,20 @@ func (s *Server) getRepoByEmail(ctx context.Context, email string) (*models.Repo
 
 func (s *Server) getRepoActorByEmail(ctx context.Context, email string) (*models.RepoActor, error) {
 	var repo models.RepoActor
-	if err := s.db.Raw(ctx, "SELECT r.*, a.* FROM repos r LEFT JOIN actors a ON r.did = a.did WHERE r.email= ?", nil, email).Scan(&repo).Error; err != nil {
+	// Use explicit column selection to ensure proper mapping to embedded structs.
+	if err := s.db.Raw(ctx, `
+		SELECT
+			r.did, r.created_at, r.email, r.email_confirmed_at, r.email_verification_code,
+			r.email_verification_code_expires_at, r.email_update_code, r.email_update_code_expires_at,
+			r.password_reset_code, r.password_reset_code_expires_at, r.plc_operation_code,
+			r.plc_operation_code_expires_at, r.account_delete_code, r.account_delete_code_expires_at,
+			r.password, r.auth_public_key, r.signing_public_key, r.credential_id, r.compat_mode,
+			r.rev, r.root, r.preferences, r.deactivated,
+			a.handle
+		FROM repos r
+		LEFT JOIN actors a ON r.did = a.did
+		WHERE r.email = ?
+	`, nil, email).Scan(&repo).Error; err != nil {
 		return nil, err
 	}
 	if repo.Repo.Did == "" {
@@ -42,7 +55,22 @@ func (s *Server) getRepoActorByEmail(ctx context.Context, email string) (*models
 
 func (s *Server) getRepoActorByDid(ctx context.Context, did string) (*models.RepoActor, error) {
 	var repo models.RepoActor
-	if err := s.db.Raw(ctx, "SELECT r.*, a.* FROM repos r LEFT JOIN actors a ON r.did = a.did WHERE r.did = ?", nil, did).Scan(&repo).Error; err != nil {
+	// Use explicit column selection to ensure proper mapping to embedded structs.
+	// The r.*, a.* pattern can cause issues with GORM's Scan when structs have
+	// overlapping field names (both Repo and Actor have "Did").
+	if err := s.db.Raw(ctx, `
+		SELECT
+			r.did, r.created_at, r.email, r.email_confirmed_at, r.email_verification_code,
+			r.email_verification_code_expires_at, r.email_update_code, r.email_update_code_expires_at,
+			r.password_reset_code, r.password_reset_code_expires_at, r.plc_operation_code,
+			r.plc_operation_code_expires_at, r.account_delete_code, r.account_delete_code_expires_at,
+			r.password, r.auth_public_key, r.signing_public_key, r.credential_id, r.compat_mode,
+			r.rev, r.root, r.preferences, r.deactivated,
+			a.handle
+		FROM repos r
+		LEFT JOIN actors a ON r.did = a.did
+		WHERE r.did = ?
+	`, nil, did).Scan(&repo).Error; err != nil {
 		return nil, err
 	}
 	if repo.Repo.Did == "" {

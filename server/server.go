@@ -538,6 +538,7 @@ func (s *Server) addRoutes() {
 	r.With(s.handleWebSessionMiddleware).Post("/account/passkey-assertion-challenge", s.handlePasskeyAssertionChallenge)
 	r.With(s.handleWebSessionMiddleware).Post("/account/delete", s.handleAccountDelete)
 	r.Get("/account/signer", s.handleAccountSigner)
+	r.With(s.handleWebSessionMiddleware).Post("/account/compat", s.handleAccountUpdateCompat)
 
 	// oauth account
 	r.Get("/oauth/jwks", s.handleOauthJwks)

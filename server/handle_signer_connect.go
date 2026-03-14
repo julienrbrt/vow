@@ -43,19 +43,14 @@ type wsSignRequest struct {
 	ExpiresAt string           `json:"expiresAt"` // RFC3339
 }
 
-// wsIncoming is used for initial type-sniffing before full decode.
-//
-// sign_response carries the three fields from the WebAuthn AuthenticatorAssertionResponse:
-//   - AuthenticatorData: base64url authenticatorData bytes
-//   - ClientDataJSON:    base64url clientDataJSON bytes
-//   - Signature:         base64url DER-encoded ECDSA signature
 type wsIncoming struct {
 	Type              string `json:"type"`
 	RequestID         string `json:"requestId"`
-	AuthenticatorData string `json:"authenticatorData,omitempty"` // base64url
-	ClientDataJSON    string `json:"clientDataJSON,omitempty"`    // base64url
-	Signature         string `json:"signature,omitempty"`         // base64url DER-encoded ECDSA
-	CommitSignature   string `json:"commitSignature,omitempty"`   // base64url 64-byte raw r||s signature
+	AuthenticatorData string `json:"authenticatorData"`
+	ClientDataJSON    string `json:"clientDataJSON"`
+	Signature         string `json:"signature"`
+	CommitSignature   string `json:"commitSignature"`
+	JWTPayload        string `json:"jwtPayload"`
 }
 
 // handleSignerConnect upgrades the connection to a WebSocket and registers it
@@ -295,21 +290,6 @@ func buildSignRequestMsg(requestID string, did string, payloadB64 string, ops []
 	})
 }
 
-// extractPayloadFromMsg extracts the "payload" field from a sign_request JSON
-// message without a full re-parse.
-func extractPayloadFromMsg(msg []byte) (string, error) {
-	var req struct {
-		Payload string `json:"payload"`
-	}
-	if err := json.Unmarshal(msg, &req); err != nil {
-		return "", err
-	}
-	if req.Payload == "" {
-		return "", nil
-	}
-	return req.Payload, nil
-}
-
 // verifyWebAuthnSignResponse decodes the three base64url fields from a
 // sign_response message, reconstructs the expected challenge from the payload,
 // verifies the WebAuthn P-256 assertion, and returns the raw 64-byte (r‖s)
@@ -375,7 +355,7 @@ func verifyWebAuthnSignResponse(
 	}
 
 	// Verify the commit signature against the registered signing key.
-	pubKey, err := atcrypto.ParsePublicBytesP256(signingPubKey)
+	pubKey, err := atcrypto.ParsePublicBytesK256(signingPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse registered signing key: %w", err)
 	}

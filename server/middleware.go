@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atcrypto"
+	atproto_identity "github.com/bluesky-social/indigo/atproto/identity"
+	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/golang-jwt/jwt/v4"
 	"gorm.io/gorm"
 	"pkg.rbrt.fr/vow/internal/helpers"
@@ -153,18 +156,63 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			repo = maybeRepo
 		}
 
-		// All ES256 tokens issued by this PDS — both regular access/refresh
-		// tokens and service-auth tokens (lxm claim) — are signed by the PDS
-		// server key. Service-auth tokens were previously routed through the
-		// passkey WebSocket, but since the atproto_service split-key model was
-		// adopted (see RFC), they are now signed server-side so that background
-		// requests never require passkey usage.
-		token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
-				return nil, fmt.Errorf("unsupported signing method: %v", t.Header["alg"])
+		// For service auth tokens (lxm claim), verify using the appropriate key based
+		// on compat mode. In compat mode, tokens are signed with ES256K using the user's
+		// #atproto key. Otherwise, use ES256 with the PDS server key.
+		if hasLxm && repo != nil && repo.CompatMode {
+			// Compat mode: verify with user's #atproto key from DID document
+			did := syntax.DID(did)
+			didDoc, err := s.passport.FetchDoc(ctx, did.String())
+			if err != nil {
+				logger.Error("unable to resolve did for service auth", "did", did, "error", err)
+				helpers.InputError(w, nil)
+				return
 			}
-			return &s.privateKey.PublicKey, nil
-		})
+
+			verificationMethods := make([]atproto_identity.DocVerificationMethod, len(didDoc.VerificationMethods))
+			for i, vm := range didDoc.VerificationMethods {
+				verificationMethods[i] = atproto_identity.DocVerificationMethod{
+					ID:                 vm.Id,
+					Type:               vm.Type,
+					PublicKeyMultibase: vm.PublicKeyMultibase,
+					Controller:         vm.Controller,
+				}
+			}
+			services := make([]atproto_identity.DocService, len(didDoc.Service))
+			for i, svc := range didDoc.Service {
+				services[i] = atproto_identity.DocService{
+					ID:              svc.Id,
+					Type:            svc.Type,
+					ServiceEndpoint: svc.ServiceEndpoint,
+				}
+			}
+			parsedIdentity := atproto_identity.ParseIdentity(&atproto_identity.DIDDocument{
+				DID:                did,
+				AlsoKnownAs:        didDoc.AlsoKnownAs,
+				VerificationMethod: verificationMethods,
+				Service:            services,
+			})
+
+			var key atcrypto.PublicKey
+			key, err = parsedIdentity.PublicKey() // use #atproto for compat mode
+			if err != nil {
+				logger.Error("signing key not found for did", "did", did, "error", err)
+				helpers.InputError(w, nil)
+				return
+			}
+
+			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
+				return key, nil
+			})
+		} else {
+			// Non-compat mode or regular access/refresh tokens: use PDS server key (ES256)
+			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
+					return nil, fmt.Errorf("unsupported signing method: %v", t.Header["alg"])
+				}
+				return &s.privateKey.PublicKey, nil
+			})
+		}
 		if err != nil {
 			logger.Error("error parsing jwt", "error", err)
 			helpers.ExpiredTokenError(w)
@@ -324,6 +372,8 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 			helpers.ServerError(w, nil)
 			return
 		}
+
+		logger.Info("oauth middleware fetched repo", "did", repo.Repo.Did, "compatMode", repo.CompatMode)
 
 		r = setContextValue(r, contextKeyRepo, repo)
 		r = setContextValue(r, contextKeyDid, repo.Repo.Did)

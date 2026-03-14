@@ -20,6 +20,7 @@ import (
 	"github.com/glebarez/sqlite"
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lmittmann/tint"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -123,9 +124,10 @@ func buildLogger(v *viper.Viper) *slog.Logger {
 		}
 	}
 
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     level,
-		AddSource: true,
+	handler := tint.NewHandler(os.Stdout, &tint.Options{
+		Level:      level,
+		AddSource:  true,
+		TimeFormat: time.Kitchen,
 	})
 	logger := slog.New(handler)
 	slog.SetDefault(logger)

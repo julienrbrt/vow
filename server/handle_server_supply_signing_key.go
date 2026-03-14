@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
@@ -112,10 +113,10 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(signingKeyBytes)
+	pubKey, err := atcrypto.ParsePublicBytesK256(signingKeyBytes)
 	if err != nil {
 		logger.Error("derived signing key rejected by atcrypto", "error", err)
-		helpers.InputError(w, new("invalid derived P-256 public key"))
+		helpers.InputError(w, new("invalid derived secp256k1 public key"))
 		return
 	}
 
@@ -255,4 +256,15 @@ func (s *Server) handleSupplySigningKey(w http.ResponseWriter, r *http.Request) 
 		RotationKeys:    newRotationKeys,
 		SignedOperation: signedOp,
 	})
+}
+
+// pdsDIDKey returns the PDS server's P-256 public key encoded as a did:key
+// string. This is what gets written into verificationMethods["atproto_service"]
+// of the user's DID document during supplySigningKey.
+func (s *Server) pdsDIDKey() (string, error) {
+	pub, err := s.privateKeyATP.PublicKey()
+	if err != nil {
+		return "", fmt.Errorf("getting PDS public key: %w", err)
+	}
+	return pub.DIDKey(), nil
 }

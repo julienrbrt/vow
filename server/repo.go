@@ -599,7 +599,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return nil, fmt.Errorf("no public key registered for account %s", urepo.Did)
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(urepo.SigningPublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesK256(urepo.SigningPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("parsing stored public key: %w", err)
 	}

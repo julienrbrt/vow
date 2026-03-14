@@ -78,6 +78,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		"Did":           repo.Repo.Did,
 		"HasSigningKey": len(repo.SigningPublicKey) > 0,
 		"CredentialID":  credentialID,
+		"CompatMode":    repo.CompatMode,
 		"Tokens":        tokenInfo,
 		"flashes":       s.getFlashesFromSession(w, r, sess),
 	}); err != nil {

@@ -28,6 +28,8 @@ type Repo struct {
 	// during registration. It is stored so the server can build the
 	// allowCredentials list when requesting an assertion from the passkey.
 	CredentialID []byte
+	// CompatMode enables user-side signing of service-auth JWTs.
+	CompatMode bool
 	Rev          string
 	Root         []byte
 	Preferences  []byte

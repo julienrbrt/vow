@@ -192,8 +192,7 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			accessClaims["cnf"] = *authReq.Parameters.DpopJkt
 		}
 
-		accessToken := jwt.NewWithClaims(jwt.SigningMethodES256, accessClaims)
-		accessString, err := accessToken.SignedString(s.privateKey)
+		accessString, err := s.signInternalJWT(accessClaims)
 		if err != nil {
 			helpers.ServerError(w, nil)
 			return
@@ -299,8 +298,7 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			accessClaims["cnf"] = oauthToken.Parameters.DpopJkt
 		}
 
-		accessToken := jwt.NewWithClaims(jwt.SigningMethodES256, accessClaims)
-		accessString, err := accessToken.SignedString(s.privateKey)
+		accessString, err := s.signInternalJWT(accessClaims)
 		if err != nil {
 			helpers.ServerError(w, nil)
 			return

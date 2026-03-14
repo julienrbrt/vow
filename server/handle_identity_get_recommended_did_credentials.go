@@ -21,7 +21,7 @@ func (s *Server) handleGetRecommendedDidCredentials(w http.ResponseWriter, r *ht
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(repo.SigningPublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesK256(repo.SigningPublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

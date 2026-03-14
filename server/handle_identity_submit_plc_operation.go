@@ -62,7 +62,7 @@ func (s *Server) handleSubmitPlcOperation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pubKey, err := atcrypto.ParsePublicBytesP256(repo.SigningPublicKey)
+	pubKey, err := atcrypto.ParsePublicBytesK256(repo.SigningPublicKey)
 	if err != nil {
 		logger.Error("error parsing stored public key", "error", err)
 		helpers.ServerError(w, nil)

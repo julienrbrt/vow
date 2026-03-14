@@ -2,12 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/bluesky-social/indigo/atproto/atcrypto"
-	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
@@ -62,7 +63,14 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 
 	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
 
-	token, err := s.signServiceAuthJWT(r.Context(), repo, req.Aud, req.Lxm, exp)
+	var token string
+	var err error
+	if repo.CompatMode {
+		token, err = s.requestUserSignedServiceAuthJWT(r.Context(), repo, req.Aud, req.Lxm, exp)
+	} else {
+		token, err = s.signServiceAuthJWT(repo, req.Aud, req.Lxm, exp)
+	}
+
 	if helpers.HandleSignerError(w, err) {
 		logger.Error("error signing service auth JWT", "error", err)
 		return
@@ -78,6 +86,70 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// requestUserSignedServiceAuthJWT returns a user-signed ES256K service-auth JWT.
+func (s *Server) requestUserSignedServiceAuthJWT(
+	ctx context.Context,
+	repo *models.RepoActor,
+	aud string,
+	lxm string,
+	exp int64,
+) (string, error) {
+	did := repo.Repo.Did
+	now := time.Now().Unix()
+	if exp == 0 {
+		exp = now + int64(5*time.Minute/time.Second)
+	}
+
+	header := map[string]string{
+		"alg": "ES256K",
+		"typ": "JWT",
+		"kid": did + "#atproto",
+	}
+	hj, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling header: %w", err)
+	}
+	encheader := strings.TrimRight(base64.RawURLEncoding.EncodeToString(hj), "=")
+
+	payload := map[string]any{
+		"iss": did,
+		"aud": aud,
+		"jti": uuid.NewString(),
+		"exp": exp,
+		"iat": now,
+	}
+	if lxm != "" {
+		payload["lxm"] = lxm
+	}
+	pj, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling payload: %w", err)
+	}
+	encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
+
+	signingString := fmt.Sprintf("%s.%s", encheader, encpayload)
+
+	// Request a signature from the user's browser via the WebSocket connection.
+	requestID := uuid.NewString()
+	msg, err := json.Marshal(map[string]string{
+		"type":       "sign_jwt_request",
+		"requestId":  requestID,
+		"jwtPayload": base64.RawURLEncoding.EncodeToString([]byte(signingString)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshalling sign_jwt_request: %w", err)
+	}
+
+	sig, err := s.signerHub.RequestSignature(ctx, did, requestID, msg)
+	if err != nil {
+		return "", err // Includes ErrSignerNotConnected, context cancellation, etc.
+	}
+
+	// Append the signature to the token.
+	encsig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(sig), "=")
+	return signingString + "." + encsig, nil
+}
+
 // signServiceAuthJWT returns a signed ES256 service-auth JWT for the given
 // (aud, lxm) pair.
 //
@@ -90,21 +162,29 @@ func (s *Server) handleServerGetServiceAuth(w http.ResponseWriter, r *http.Reque
 //
 // lxm may be empty, in which case no "lxm" claim is included.
 func (s *Server) signServiceAuthJWT(
-	ctx context.Context,
 	repo *models.RepoActor,
 	aud string,
 	lxm string,
 	exp int64,
 ) (string, error) {
-
 	did := repo.Repo.Did
-
 	now := time.Now().Unix()
 	if exp == 0 {
 		exp = now + int64(5*time.Minute/time.Second)
 	}
 
-	claims := jwt.MapClaims{
+	header := map[string]string{
+		"alg": "ES256",
+		"typ": "JWT",
+		"kid": did + "#atproto_service",
+	}
+	hj, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling header: %w", err)
+	}
+	encheader := base64.RawURLEncoding.EncodeToString(hj)
+
+	payload := map[string]any{
 		"iss": did,
 		"aud": aud,
 		"jti": uuid.NewString(),
@@ -112,54 +192,21 @@ func (s *Server) signServiceAuthJWT(
 		"iat": now,
 	}
 	if lxm != "" {
-		claims["lxm"] = lxm
+		payload["lxm"] = lxm
 	}
-
-	// Register a custom ES256 signing method that delegates to atcrypto so the
-	// signature is always low-S normalised, as the ATProto spec requires.
-	token := jwt.NewWithClaims(newES256AtpSigningMethod(), claims)
-	return token.SignedString(s.privateKeyATP)
-}
-
-// es256AtpSigningMethod is a jwt.SigningMethod that uses atcrypto.PrivateKeyP256
-// to produce low-S normalised ES256 signatures, satisfying the ATProto spec.
-type es256AtpSigningMethod struct{}
-
-func newES256AtpSigningMethod() *es256AtpSigningMethod { return &es256AtpSigningMethod{} }
-
-func (m *es256AtpSigningMethod) Alg() string { return "ES256" }
-
-func (m *es256AtpSigningMethod) Sign(signingString string, key any) (string, error) {
-	priv, ok := key.(*atcrypto.PrivateKeyP256)
-	if !ok {
-		return "", fmt.Errorf("es256AtpSigningMethod: expected *atcrypto.PrivateKeyP256, got %T", key)
-	}
-	sig, err := priv.HashAndSign([]byte(signingString))
+	pj, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("es256AtpSigningMethod: signing failed: %w", err)
+		return "", fmt.Errorf("error marshaling payload: %w", err)
 	}
-	return jwt.EncodeSegment(sig), nil //nolint:staticcheck
-}
+	encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
 
-func (m *es256AtpSigningMethod) Verify(signingString string, signature string, key any) error {
-	sigBytes, err := jwt.DecodeSegment(signature) //nolint:staticcheck
-	if err != nil {
-		return err
-	}
-	pub, ok := key.(atcrypto.PublicKey)
-	if !ok {
-		return fmt.Errorf("es256AtpSigningMethod: expected atcrypto.PublicKey, got %T", key)
-	}
-	return pub.HashAndVerifyLenient([]byte(signingString), sigBytes)
-}
+	signingString := fmt.Sprintf("%s.%s", encheader, encpayload)
 
-// pdsDIDKey returns the PDS server's P-256 public key encoded as a did:key
-// string. This is what gets written into verificationMethods["atproto_service"]
-// of the user's DID document during supplySigningKey.
-func (s *Server) pdsDIDKey() (string, error) {
-	pub, err := s.privateKeyATP.PublicKey()
+	sig, err := s.privateKeyATP.HashAndSign([]byte(signingString))
 	if err != nil {
-		return "", fmt.Errorf("getting PDS public key: %w", err)
+		return "", fmt.Errorf("signing failed: %w", err)
 	}
-	return pub.DIDKey(), nil
+
+	encsig := strings.TrimRight(base64.RawURLEncoding.EncodeToString(sig), "=")
+	return signingString + "." + encsig, nil
 }

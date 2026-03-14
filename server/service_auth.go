@@ -72,14 +72,20 @@ func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid 
 			Service:            services,
 		})
 
-		// Prefer the dedicated service-auth key (atproto_service) when present.
-		// ref: https://github.com/bluesky-social/atproto/discussions/4739
-		key, err := parsedIdentity.GetPublicKey("atproto_service")
-		if err != nil {
-			key, err = parsedIdentity.PublicKey() // fallback to #atproto
+		// In compat mode, the JWT is signed with #atproto, so verify with that key.
+		// Otherwise, prefer #atproto_service when present (ref: https://github.com/bluesky-social/atproto/discussions/4739)
+		var key atcrypto.PublicKey
+		repo, err := s.getRepoActorByDid(ctx, did.String())
+		if err == nil && repo.CompatMode {
+			key, err = parsedIdentity.PublicKey() // use #atproto
+		} else {
+			key, err = parsedIdentity.GetPublicKey("atproto_service")
 			if err != nil {
-				return nil, fmt.Errorf("signing key not found for did %s: %s", did, err)
+				key, err = parsedIdentity.PublicKey() // fallback to #atproto
 			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("signing key not found for did %s: %s", did, err)
 		}
 		return key, nil
 	})
