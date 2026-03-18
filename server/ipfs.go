@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
+
+	caopts "github.com/ipfs/kubo/core/coreiface/options"
+	"github.com/ipfs/boxo/path"
+	"github.com/ipfs/go-cid"
+	"github.com/ipfs/kubo/client/rpc"
 )
 
 // readJSON decodes a single JSON value from r into dst.
@@ -16,32 +20,30 @@ func readJSON(r io.Reader, dst any) error {
 // given CID so the content becomes eligible for garbage collection.
 // It is intentionally best-effort: errors are logged but not propagated.
 func (s *Server) unpinFromIPFS(cidStr string) {
-	endpoint := s.ipfsConfig.NodeURL + "/api/v0/pin/rm?arg=" + cidStr + "&recursive=true"
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, nil)
+	c, err := cid.Decode(cidStr)
 	if err != nil {
-		s.logger.Warn("ipfs unpin: failed to build request", "cid", cidStr, "error", err)
+		s.logger.Warn("ipfs unpin: failed to decode CID", "cid", cidStr, "error", err)
 		return
 	}
 
-	resp, err := s.http.Do(req)
+	node, err := rpc.NewURLApiWithClient(s.ipfsConfig.NodeURL, nil)
 	if err != nil {
-		s.logger.Warn("ipfs unpin: request failed", "cid", cidStr, "error", err)
+		s.logger.Warn("ipfs unpin: failed to create client", "cid", cidStr, "error", err)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	// Kubo returns 500 with "not pinned" in the body if the CID was never
-	// pinned — treat that as a no-op rather than an error worth logging loudly.
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		s.logger.Warn("ipfs unpin: unexpected status",
-			"cid", cidStr,
-			"status", resp.StatusCode,
-			"body", string(msg),
-		)
+	p := path.FromCid(c)
+	if err := node.Pin().Rm(context.Background(), p, caopts.Pin.RmRecursive(true)); err != nil {
+		// Don't log loudly if CID was never pinned
+		if !isNotPinnedError(err) {
+			s.logger.Warn("ipfs unpin: failed to unpin", "cid", cidStr, "error", err)
+		}
 		return
 	}
 
 	s.logger.Info("ipfs unpin: blob unpinned", "cid", cidStr)
+}
+
+func isNotPinnedError(err error) bool {
+	return err != nil && (err.Error() == "not pinned" || err.Error() == "is not pinned")
 }
