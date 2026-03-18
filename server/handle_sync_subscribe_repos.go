@@ -58,7 +58,9 @@ func (s *Server) handleSyncSubscribeRepos(w http.ResponseWriter, r *http.Request
 		defer cancel()
 
 		for {
-			if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			// Use a long deadline to allow idle firehose connections without false timeouts.
+			// 5 minutes is reasonable - if client disconnects, TCP will detect it.
+			if err := conn.SetReadDeadline(time.Now().Add(5 * time.Minute)); err != nil {
 				logger.Warn("error setting read deadline", "err", err)
 				return
 			}
