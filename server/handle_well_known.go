@@ -69,12 +69,11 @@ func (s *Server) handleAtprotoDid(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.With("name", "handleAtprotoDid")
 
-	host := r.Host
+	// Use X-Forwarded-Host header if present (for reverse proxy setups), otherwise fall back to configured hostname
+	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
-		helpers.InputError(w, new("Invalid handle."))
-		return
+		host = s.config.Hostname
 	}
-
 	host = strings.Split(host, ":")[0]
 	host = strings.ToLower(strings.TrimSpace(host))
 
