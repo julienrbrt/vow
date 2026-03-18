@@ -100,6 +100,12 @@ func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
 
 	if parRequest.DpopJkt == nil {
 		if client.Metadata.DpopBoundAccessTokens {
+			if dpopProof.JKT == "" {
+				msg := "dpop proof is required for dpop bound access tokens"
+				logger.Error(msg)
+				helpers.InputError(w, &msg)
+				return
+			}
 			parRequest.DpopJkt = new(dpopProof.JKT)
 		}
 	} else {

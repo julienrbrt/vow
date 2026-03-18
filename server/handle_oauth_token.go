@@ -166,6 +166,11 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if client.Metadata.DpopBoundAccessTokens && authReq.Parameters.DpopJkt == nil {
+			helpers.InputError(w, new("dpop jkt is required for dpop bound access tokens"))
+			return
+		}
+
 		repo, err := s.getRepoActorByDid(ctx, *authReq.Sub)
 		if err != nil {
 			helpers.InputError(w, new("unable to find actor"))

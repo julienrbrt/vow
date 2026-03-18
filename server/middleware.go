@@ -350,8 +350,14 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if oauthToken.Parameters.DpopJkt == nil {
+			logger.Error("token not bound to dpop")
+			helpers.InputError(w, new("token not bound to dpop"))
+			return
+		}
+
 		if *oauthToken.Parameters.DpopJkt != proof.JKT {
-			logger.Error("jkt mismatch", "token", oauthToken.Parameters.DpopJkt, "proof", proof.JKT)
+			logger.Error("jkt mismatch", "token", *oauthToken.Parameters.DpopJkt, "proof", proof.JKT)
 			helpers.InputError(w, new("dpop jkt mismatch"))
 			return
 		}
