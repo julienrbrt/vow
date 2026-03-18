@@ -23,15 +23,18 @@ services:
     image: ipfs/kubo:latest
     container_name: vow-ipfs
     volumes:
-      - ipfs_data:/data/ipfs
+      - /opt/ipfs:/data/ipfs
     environment:
       # Disable local network discovery.
       IPFS_PROFILE: server
     ports:
+      # P2P
+      - 4001:4001
+      - 4001:4001/udp
       # Expose the IPFS gateway to the reverse proxy only.
-      - 8081:8080
+      - 127.0.0.1:8080:8080
       # Keep the RPC API internal.
-      - 5001:5001
+      - 127.0.0.1:5001:5001
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "ipfs", "id"]

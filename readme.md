@@ -92,7 +92,7 @@ docker compose logs -f
   - `jwk.key` — JWK private key
   - `initial-invite-code.txt` — first invite code (first run only)
 - `./data/` — SQLite metadata database
-- `ipfs_data` Docker volume — IPFS blocks and blobs
+- `/opt/ipfs` Docker volume — IPFS blocks and blobs
 
 ### Reverse Proxy
 
