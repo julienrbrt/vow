@@ -18,8 +18,32 @@ import (
 	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
-// supportedScopes lists accepted OAuth scopes.
-var supportedScopes = []string{"atproto", "transition:generic", "transition:chat.bsky"}
+// supportedScopes lists static OAuth scopes.
+var supportedScopes = []string{"atproto"}
+
+// supportedScopePrefixes lists prefixes for dynamic ATProto scopes.
+var supportedScopePrefixes = []string{
+	"blob:",       // Blob upload permissions (e.g., "blob:*/*", "blob:image/*")
+	"account:",    // Account access (e.g., "account:email", "account:status")
+	"identity:",   // Identity operations (e.g., "identity:*")
+	"repo:",       // Repository operations (e.g., "repo:*")
+	"rpc:",        // RPC calls (e.g., "rpc:*?aud=did:web:api.bsky.app#bsky_appview")
+	"include:",    // Included permissions
+	"transition:", // Transitional scopes (e.g., "transition:generic", "transition:chat.bsky")
+}
+
+// isScopeSupported checks if a scope is in the supported list or matches a dynamic prefix.
+func isScopeSupported(scope string) bool {
+	if slices.Contains(supportedScopes, scope) {
+		return true
+	}
+	for _, prefix := range supportedScopePrefixes {
+		if strings.HasPrefix(scope, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 type Manager struct {
 	cli           *http.Client
@@ -284,7 +308,7 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 			return nil, fmt.Errorf("duplicate scope `%s`", scope)
 		}
 
-		if !slices.Contains(supportedScopes, scope) {
+		if !isScopeSupported(scope) {
 			return nil, fmt.Errorf("unsupported scope %q", scope)
 		}
 
