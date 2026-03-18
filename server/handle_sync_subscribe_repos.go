@@ -55,16 +55,22 @@ func (s *Server) handleSyncSubscribeRepos(w http.ResponseWriter, r *http.Request
 
 	// drop the connection whenever a subscriber disconnects from the socket, we should get errors
 	go func() {
+		defer cancel()
+
 		for {
-			select {
-			case <-ctx.Done():
+			if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				logger.Warn("error setting read deadline", "err", err)
 				return
-			default:
-				if _, _, err := conn.ReadMessage(); err != nil {
+			}
+
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				if isNormalClose(err) || isTimeout(err) {
+					logger.Info("websocket disconnected", "err", err)
+				} else {
 					logger.Warn("websocket error", "err", err)
-					cancel()
-					return
 				}
+				return
 			}
 		}
 	}()
@@ -135,4 +141,23 @@ func (s *Server) handleSyncSubscribeRepos(w http.ResponseWriter, r *http.Request
 			logger.Error("error requesting crawls", "err", err)
 		}
 	}()
+}
+
+func isNormalClose(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check if it's a normal close (status codes 1000-1005, etc.)
+	// The error message typically contains "close 1000" or similar
+	errStr := err.Error()
+	return len(errStr) > 8 && errStr[:7] == "websocket: close"
+}
+
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check if it's a timeout error
+	// Using string check as the library doesn't expose error types
+	return err.Error() == "i/o timeout"
 }
