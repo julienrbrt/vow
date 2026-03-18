@@ -68,7 +68,11 @@ func (s *Server) handleOauthPar(w http.ResponseWriter, r *http.Request) {
 	} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
 		scheme = proto
 	}
-	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, scheme+"://"+r.Host+r.URL.String(), r.Header, nil)
+	host := r.Host
+	if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+		host = fwdHost
+	}
+	dpopProof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, scheme+"://"+host+r.URL.String(), r.Header, nil)
 	if err != nil {
 		if errors.Is(err, dpop.ErrUseDpopNonce) {
 			nonce := s.oauthProvider.NextNonce()

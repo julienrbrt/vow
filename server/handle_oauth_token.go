@@ -73,7 +73,17 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 		ClientAssertion:     req.ClientAssertion,
 	}
 
-	proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, r.URL.String(), r.Header, nil)
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
+		scheme = "http"
+	} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	host := r.Host
+	if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+		host = fwdHost
+	}
+	proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, scheme+"://"+host+r.URL.String(), r.Header, nil)
 	if err != nil {
 		if errors.Is(err, dpop.ErrUseDpopNonce) {
 			nonce := s.oauthProvider.NextNonce()
