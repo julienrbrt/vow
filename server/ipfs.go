@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"io"
 
-	caopts "github.com/ipfs/kubo/core/coreiface/options"
 	"github.com/ipfs/boxo/path"
 	"github.com/ipfs/go-cid"
-	"github.com/ipfs/kubo/client/rpc"
+	caopts "github.com/ipfs/kubo/core/coreiface/options"
 )
 
 // readJSON decodes a single JSON value from r into dst.
@@ -26,14 +25,8 @@ func (s *Server) unpinFromIPFS(cidStr string) {
 		return
 	}
 
-	node, err := rpc.NewURLApiWithClient(s.ipfsConfig.NodeURL, nil)
-	if err != nil {
-		s.logger.Warn("ipfs unpin: failed to create client", "cid", cidStr, "error", err)
-		return
-	}
-
 	p := path.FromCid(c)
-	if err := node.Pin().Rm(context.Background(), p, caopts.Pin.RmRecursive(true)); err != nil {
+	if err := s.ipfsAPI.Pin().Rm(context.Background(), p, caopts.Pin.RmRecursive(true)); err != nil {
 		// Don't log loudly if CID was never pinned
 		if !isNotPinnedError(err) {
 			s.logger.Warn("ipfs unpin: failed to unpin", "cid", cidStr, "error", err)
