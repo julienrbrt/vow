@@ -70,10 +70,6 @@ func (dm *Manager) CheckProof(reqMethod, reqUrl string, headers http.Header, acc
 		return nil, errors.New("HTTP method is required")
 	}
 
-	if !strings.HasPrefix(reqUrl, "https://") {
-		reqUrl = "https://" + dm.hostname + reqUrl
-	}
-
 	proof := extractProof(headers)
 	if proof == "" {
 		return nil, nil

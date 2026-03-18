@@ -260,9 +260,15 @@ func (s *Server) handleOauthToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if *oauthToken.Parameters.DpopJkt != proof.JKT {
-			helpers.InputError(w, new("dpop proof does not match expected jkt"))
-			return
+		if oauthToken.Parameters.DpopJkt != nil {
+			if proof == nil {
+				helpers.InputError(w, new("dpop proof is required"))
+				return
+			}
+			if *oauthToken.Parameters.DpopJkt != proof.JKT {
+				helpers.InputError(w, new("dpop proof does not match expected jkt"))
+				return
+			}
 		}
 
 		ageRes := oauth.GetSessionAgeFromToken(oauthToken)

@@ -337,6 +337,11 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 			helpers.InputError(w, nil)
 			return
 		}
+		if proof == nil {
+			logger.Error("missing dpop proof")
+			helpers.InputError(w, new("missing dpop proof"))
+			return
+		}
 
 		var oauthToken provider.OauthToken
 		if err := s.db.Raw(ctx, "SELECT * FROM oauth_tokens WHERE token = ?", nil, accessToken).Scan(&oauthToken).Error; err != nil {
