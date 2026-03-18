@@ -28,7 +28,7 @@ func (s *Server) handleRepoImportRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsConfig)
+	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsAPI)
 
 	cs, err := car.NewCarReader(bytes.NewReader(b))
 	if err != nil {

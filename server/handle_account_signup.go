@@ -184,7 +184,7 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bs := newBlockstoreForRepo(did, s.ipfsConfig)
+	bs := newBlockstoreForRepo(did, s.ipfsAPI)
 
 	clk := syntax.NewTIDClock(0)
 	repo := &atp.Repo{

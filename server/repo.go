@@ -352,7 +352,7 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return nil, err
 	}
 
-	bs, baseBS := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+	bs, baseBS := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsAPI)
 	// dbs is the unwrapped base blockstore used for direct reads when building
 	// the firehose CAR slice.
 	dbs := baseBS
@@ -623,7 +623,7 @@ func (rm *RepoMan) finaliseWriteFromState(
 	sigBytes []byte,
 	dbs blockstore.Blockstore,
 ) ([]ApplyWriteResult, error) {
-	bs, _ := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+	bs, _ := newRecordingBlockstoreForRepo(urepo.Did, rm.s.ipfsAPI)
 
 	// Replay the write log blocks into the fresh blockstore so finaliseCommit
 	// can locate them when building the CAR.
@@ -790,7 +790,7 @@ func (rm *RepoMan) getRecordProof(ctx context.Context, urepo models.Repo, collec
 	var proofBlocks []blocks.Block
 	var recordCid *cid.Cid
 
-	dbs := newBlockstoreForRepo(urepo.Did, rm.s.ipfsConfig)
+	dbs := newBlockstoreForRepo(urepo.Did, rm.s.ipfsAPI)
 
 	if err := rm.withRepo(ctx, urepo.Did, commitCid, dbs, func(r *atp.Repo) (cid.Cid, error) {
 		path := collection + "/" + rkey

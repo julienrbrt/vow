@@ -71,7 +71,7 @@ func (s *Server) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsConfig)
+	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsAPI)
 
 	for _, c := range cids {
 		b, err := bs.Get(ctx, c)

@@ -55,7 +55,7 @@ func (s *Server) handleSyncGetRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsConfig)
+	bs := newBlockstoreForRepo(urepo.Repo.Did, s.ipfsAPI)
 	if err := writeRepoBlocksFromBlockstore(ctx, buf, bs, rc); err != nil {
 		logger.Error("error writing repo blocks to car", "error", err)
 		helpers.ServerError(w, nil)

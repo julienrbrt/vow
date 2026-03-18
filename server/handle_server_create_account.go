@@ -222,7 +222,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if request.Did == nil || *request.Did == "" {
-		bs := newBlockstoreForRepo(signupDid, s.ipfsConfig)
+		bs := newBlockstoreForRepo(signupDid, s.ipfsAPI)
 
 		clk := syntax.NewTIDClock(0)
 		r := &atp.Repo{

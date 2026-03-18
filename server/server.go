@@ -30,6 +30,7 @@ import (
 	"github.com/go-playground/validator"
 	"github.com/gorilla/sessions"
 	"github.com/ipfs/go-cid"
+	"github.com/ipfs/kubo/client/rpc"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"pkg.rbrt.fr/vow/identity"
 	"pkg.rbrt.fr/vow/internal/db"
@@ -93,6 +94,7 @@ type Server struct {
 
 	dbName     string
 	ipfsConfig *IPFSConfig
+	ipfsAPI    *rpc.HttpApi
 }
 
 type Args struct {
@@ -392,6 +394,11 @@ func New(args *Args) (*Server, error) {
 		return nil, fmt.Errorf("failed to create event persister: %w", err)
 	}
 
+	ipfsAPI, err := rpc.NewURLApiWithClient(args.IPFSConfig.NodeURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IPFS client: %w", err)
+	}
+
 	cookieStore := sessions.NewCookieStore([]byte(args.SessionSecret))
 
 	s := &Server{
@@ -425,6 +432,7 @@ func New(args *Args) (*Server, error) {
 
 		dbName:     args.DbName,
 		ipfsConfig: args.IPFSConfig,
+		ipfsAPI:    ipfsAPI,
 
 		oauthProvider: provider.NewProvider(provider.Args{
 			Hostname: args.Hostname,
