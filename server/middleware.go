@@ -323,7 +323,7 @@ func (s *Server) handleOauthSessionMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("access-control-expose-headers", "DPoP-Nonce")
 		}
 
-		proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, "https://"+s.config.Hostname+r.URL.String(), r.Header, new(accessToken))
+		proof, err := s.oauthProvider.DpopManager.CheckProof(r.Method, helpers.RequestURL(r), r.Header, new(accessToken))
 		if err != nil {
 			if errors.Is(err, dpop.ErrUseDpopNonce) {
 				w.Header().Set("WWW-Authenticate", `DPoP error="use_dpop_nonce"`)
