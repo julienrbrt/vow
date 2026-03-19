@@ -350,6 +350,8 @@ type serialisedBlock struct {
 // or an error occurs. Standard ATProto clients see a normal (slightly slower)
 // response; the signing round-trip is invisible to them.
 func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []Op, swapCommit *string) ([]ApplyWriteResult, error) {
+	_ = swapCommit // TODO: eventually use this.
+
 	rootcid, err := cid.Cast(urepo.Root)
 	if err != nil {
 		return nil, err

@@ -104,6 +104,7 @@ type Blob struct {
 	Did       string `gorm:"index;index:idx_blob_did_cid"`
 	Cid       []byte `gorm:"index;index:idx_blob_did_cid"`
 	RefCount  int
+	MimeType  string
 }
 
 type EventRecord struct {

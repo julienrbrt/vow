@@ -7,6 +7,7 @@ import (
 
 	"github.com/ipfs/go-cid"
 	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
@@ -47,13 +48,13 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 
 	// Verify this blob is registered to the given DID. We don't store the
 	// blob bytes here — just the metadata row that proves ownership.
-	var count int64
-	if err := s.db.Raw(ctx, "SELECT COUNT(*) FROM blobs WHERE did = ? AND cid = ?", nil, did, c.Bytes()).Scan(&count).Error; err != nil {
+	var blob models.Blob
+	if err := s.db.Raw(ctx, "SELECT * FROM blobs WHERE did = ? AND cid = ?", nil, did, c.Bytes()).Scan(&blob).Error; err != nil {
 		logger.Error("error looking up blob", "error", err)
 		helpers.ServerError(w, nil)
 		return
 	}
-	if count == 0 {
+	if blob.Did == "" {
 		helpers.InputError(w, new("BlobNotFound"))
 		return
 	}
@@ -94,7 +95,7 @@ func (s *Server) handleSyncGetBlob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename="+c.String())
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", blob.MimeType)
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		logger.Error("failed to stream blob response", "error", err)

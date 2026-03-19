@@ -2,18 +2,11 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 
 	"github.com/ipfs/boxo/path"
 	"github.com/ipfs/go-cid"
 	caopts "github.com/ipfs/kubo/core/coreiface/options"
 )
-
-// readJSON decodes a single JSON value from r into dst.
-func readJSON(r io.Reader, dst any) error {
-	return json.NewDecoder(r).Decode(dst)
-}
 
 // unpinFromIPFS asks the local Kubo node to remove the recursive pin for the
 // given CID so the content becomes eligible for garbage collection.

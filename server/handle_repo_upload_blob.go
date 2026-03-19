@@ -2,12 +2,14 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 
+	"github.com/ipfs/boxo/files"
 	"github.com/ipfs/go-cid"
+	caopts "github.com/ipfs/kubo/core/coreiface/options"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -64,7 +66,7 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	c, err := s.addBlobToIPFS(fulldata.Bytes(), mime)
+	c, err := s.addBlobToIPFS(ctx, fulldata.Bytes())
 	if err != nil {
 		logger.Error("error adding blob to ipfs", "error", err)
 		helpers.ServerError(w, nil)
@@ -78,6 +80,7 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 		RefCount:  0,
 		CreatedAt: s.repoman.clock.Next().String(),
 		Cid:       c.Bytes(),
+		MimeType:  mime,
 	}
 
 	if err := s.db.Create(ctx, &blob, nil).Error; err != nil {
@@ -96,56 +99,16 @@ func (s *Server) handleRepoUploadBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 // addBlobToIPFS adds raw blob data to the configured IPFS node via the Kubo
-// HTTP RPC API (/api/v0/add) and returns the resulting CID.
-func (s *Server) addBlobToIPFS(data []byte, mimeType string) (cid.Cid, error) {
-	endpoint := s.ipfsConfig.NodeURL + "/api/v0/add?cid-version=1&hash=sha2-256&pin=true&quieter=true"
+// RPC client and returns the resulting CID.
+func (s *Server) addBlobToIPFS(ctx context.Context, data []byte) (cid.Cid, error) {
+	s.logger.Debug("adding blob to ipfs", "size", len(data))
 
-	body := new(bytes.Buffer)
-	writer := multipart.NewWriter(body)
-
-	part, err := writer.CreateFormFile("file", "blob")
+	p, err := s.ipfsAPI.Unixfs().Add(ctx, files.NewBytesFile(data),
+		caopts.Unixfs.CidVersion(1),
+	)
 	if err != nil {
-		return cid.Undef, fmt.Errorf("error creating multipart field: %w", err)
+		return cid.Undef, fmt.Errorf("error adding blob to ipfs: %w", err)
 	}
 
-	if _, err := part.Write(data); err != nil {
-		return cid.Undef, fmt.Errorf("error writing blob data to multipart: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return cid.Undef, fmt.Errorf("error closing multipart writer: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, endpoint, body)
-	if err != nil {
-		return cid.Undef, fmt.Errorf("error building ipfs add request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return cid.Undef, fmt.Errorf("error calling ipfs add: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return cid.Undef, fmt.Errorf("ipfs add returned status %d: %s", resp.StatusCode, string(msg))
-	}
-
-	// Kubo with ?quieter=true returns a single JSON line: {"Hash":"<cid>","Size":"<n>"}
-	var result struct {
-		Hash string `json:"Hash"`
-	}
-
-	if err := readJSON(resp.Body, &result); err != nil {
-		return cid.Undef, fmt.Errorf("error decoding ipfs add response: %w", err)
-	}
-
-	c, err := cid.Parse(result.Hash)
-	if err != nil {
-		return cid.Undef, fmt.Errorf("error parsing cid from ipfs add response: %w", err)
-	}
-
-	return c, nil
+	return p.RootCid(), nil
 }
