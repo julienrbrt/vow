@@ -13,6 +13,7 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/kubo/client/rpc"
 	caopts "github.com/ipfs/kubo/core/coreiface/options"
+	"github.com/multiformats/go-multicodec"
 )
 
 // IPFSBlockstore stores blocks through Kubo.
@@ -101,6 +102,7 @@ func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error
 
 	stat, err := bs.cli.Block().Put(ctx, r,
 		caopts.Block.Hash(pref.MhType, pref.MhLength),
+		caopts.Block.CidCodec(multicodec.Code(pref.Codec).String()),
 		caopts.Block.Pin(true),
 	)
 	if err != nil {
@@ -108,11 +110,7 @@ func (bs *IPFSBlockstore) putToIPFS(ctx context.Context, blk blocks.Block) error
 	}
 
 	// Verify the returned CID matches
-	returnedPath := stat.Path()
-	returnedCid, err := cid.Decode(returnedPath.String())
-	if err != nil {
-		return fmt.Errorf("ipfs block/put: parsing returned CID: %w", err)
-	}
+	returnedCid := stat.Path().RootCid()
 	if !returnedCid.Equals(blk.Cid()) {
 		return fmt.Errorf("ipfs block/put: CID mismatch: expected %s, got %s", blk.Cid(), returnedCid)
 	}
@@ -176,4 +174,14 @@ func (bs *IPFSBlockstore) GetWriteLog() map[cid.Cid]blocks.Block {
 	out := make(map[cid.Cid]blocks.Block, len(bs.inserts))
 	maps.Copy(out, bs.inserts)
 	return out
+}
+
+// Verify checks that a block exists in IPFS, bypassing the local cache.
+func (bs *IPFSBlockstore) Verify(ctx context.Context, c cid.Cid) error {
+	p := path.FromCid(c)
+	_, err := bs.cli.Block().Stat(ctx, p)
+	if err != nil {
+		return fmt.Errorf("ipfs block/stat %s: %w", c, err)
+	}
+	return nil
 }

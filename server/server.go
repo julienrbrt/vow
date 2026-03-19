@@ -394,7 +394,10 @@ func New(args *Args) (*Server, error) {
 		return nil, fmt.Errorf("failed to create event persister: %w", err)
 	}
 
-	ipfsAPI, err := rpc.NewURLApiWithClient(args.IPFSConfig.NodeURL, http.DefaultClient)
+	ipfsHTTPClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	ipfsAPI, err := rpc.NewURLApiWithClient(args.IPFSConfig.NodeURL, ipfsHTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create IPFS client: %w", err)
 	}

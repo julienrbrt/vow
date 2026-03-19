@@ -249,6 +249,18 @@ func finaliseCommit(ctx context.Context, bs blockstore.Blockstore, uc *unsignedC
 		return cid.Undef, fmt.Errorf("writing commit block: %w", err)
 	}
 
+	// Verify the commit block and MST root were persisted to IPFS (bypassing local cache)
+	if verifier, ok := bs.(interface {
+		Verify(context.Context, cid.Cid) error
+	}); ok {
+		if err := verifier.Verify(ctx, commitCid); err != nil {
+			return cid.Undef, fmt.Errorf("verifying commit block persisted: %w", err)
+		}
+		if err := verifier.Verify(ctx, commit.Data); err != nil {
+			return cid.Undef, fmt.Errorf("verifying MST root block persisted: %w", err)
+		}
+	}
+
 	return commitCid, nil
 }
 
