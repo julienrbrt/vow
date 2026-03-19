@@ -131,11 +131,7 @@ func (s *Server) requestUserSignedServiceAuthJWT(
 
 	// Request a signature from the user's browser via the WebSocket connection.
 	requestID := uuid.NewString()
-	msg, err := json.Marshal(map[string]string{
-		"type":       "sign_jwt_request",
-		"requestId":  requestID,
-		"jwtPayload": base64.RawURLEncoding.EncodeToString([]byte(signingString)),
-	})
+	msg, err := s.buildSignJWTRequestMsg(requestID, base64.RawURLEncoding.EncodeToString([]byte(signingString)), aud, lxm)
 	if err != nil {
 		return "", fmt.Errorf("marshalling sign_jwt_request: %w", err)
 	}

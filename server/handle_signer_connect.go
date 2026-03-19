@@ -43,6 +43,16 @@ type wsSignRequest struct {
 	ExpiresAt string           `json:"expiresAt"` // RFC3339
 }
 
+// wsSignJWTRequest is the JSON envelope pushed to the signer for service-auth
+// JWT signing (CompatMode).
+type wsSignJWTRequest struct {
+	Type       string `json:"type"`       // always "sign_jwt_request"
+	RequestID  string `json:"requestId"`
+	JWTPayload string `json:"jwtPayload"` // base64url-encoded header.payload
+	Aud        string `json:"aud"`        // the audience (service DID)
+	Lxm        string `json:"lxm"`        // the lexrpc method (optional)
+}
+
 type wsIncoming struct {
 	Type              string `json:"type"`
 	RequestID         string `json:"requestId"`
@@ -287,6 +297,16 @@ func buildSignRequestMsg(requestID string, did string, payloadB64 string, ops []
 		Payload:   payloadB64,
 		Ops:       ops,
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Server) buildSignJWTRequestMsg(requestID string, payloadB64 string, aud string, lxm string) ([]byte, error) {
+	return json.Marshal(wsSignJWTRequest{
+		Type:       "sign_jwt_request",
+		RequestID:  requestID,
+		JWTPayload: payloadB64,
+		Aud:        aud,
+		Lxm:        lxm,
 	})
 }
 

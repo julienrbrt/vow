@@ -596,20 +596,8 @@
                     signerMsg.textContent = "";
                 }
 
-                function showPending(ops) {
-                    if (ops && ops.length > 0) {
-                        pendingOpsEl.textContent = ops
-                            .map(
-                                (op) =>
-                                    op.type +
-                                    " " +
-                                    op.collection +
-                                    (op.rkey ? "/" + op.rkey : ""),
-                            )
-                            .join(", ");
-                    } else {
-                        pendingOpsEl.textContent = "(details unavailable)";
-                    }
+                function showPending(summary) {
+                    pendingOpsEl.textContent = summary || "(details unavailable)";
                     pendingEl.style.display = "";
                 }
 
@@ -791,10 +779,11 @@
                     }
 
                     pendingRequestId = requestId;
-                    showPending(ops);
+                    const summary = opsToSummary(ops);
+                    showPending(summary);
                     showNotification(
                         "Vow — Signing Request",
-                        opsToSummary(ops),
+                        summary,
                     );
 
                     try {
@@ -876,7 +865,7 @@
                 // ---------------------------------------------------------------------------
 
                 async function handleSignJWTRequest(msg) {
-                    const { requestId, jwtPayload } = msg;
+                    const { requestId, jwtPayload, aud, lxm } = msg;
 
                     if (!requestId || !jwtPayload) {
                         console.warn(
@@ -896,10 +885,11 @@
                     }
 
                     pendingRequestId = requestId;
-                    showPending(null); // No ops for JWTs
+                    const summary = "Service Auth: " + (lxm || "Generic") + " for " + aud;
+                    showPending(summary);
                     showNotification(
                         "Vow — Service Authentication",
-                        "An app is requesting authentication. Please confirm with your passkey.",
+                        summary,
                     );
 
                     try {
@@ -1016,7 +1006,17 @@
                     if (!ops || ops.length === 0)
                         return "A signing request needs your approval.";
                     return ops
-                        .map((op) => op.type + " " + op.collection)
+                        .map((op) => {
+                            let action = op.type.split("#")[1] || op.type;
+                            // Prettify common ATProto method names
+                            if (action === "create") action = "Create";
+                            if (action === "update") action = "Update";
+                            if (action === "delete") action = "Delete";
+
+                            let s = action + " " + op.collection;
+                            if (op.rkey) s += "/" + op.rkey;
+                            return s;
+                        })
                         .join(", ");
                 }
 

@@ -483,6 +483,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "*")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Expose-Headers", "Atproto-Proxy-Type,Atproto-Repo-Rev,Atproto-Content-Type,Content-Type,Content-Length,WWW-Authenticate,DPoP-Nonce,X-Ratelimit-Limit,X-Ratelimit-Remaining,X-Ratelimit-Reset")
 		w.Header().Set("Access-Control-Max-Age", "100000000")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

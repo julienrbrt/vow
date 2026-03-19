@@ -119,9 +119,50 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Strip hop-by-hop and CORS headers from upstream
+	hopByHop := []string{
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"TE",
+		"Trailers",
+		"Transfer-Encoding",
+		"Upgrade",
+		"Content-Length",
+	}
+	corsHeaders := []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Expose-Headers",
+		"Access-Control-Max-Age",
+		"Access-Control-Allow-Credentials",
+	}
+
 	for k, v := range resp.Header {
+		skip := false
+		for _, h := range hopByHop {
+			if strings.EqualFold(k, h) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		for _, h := range corsHeaders {
+			if strings.EqualFold(k, h) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
 		w.Header().Set(k, strings.Join(v, ","))
 	}
+
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		logger.Error("failed to copy response body", "error", err)
