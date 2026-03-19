@@ -185,42 +185,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SigningKey is intentionally left nil — the PDS never stores a private
-	// key. PublicKey will be populated later when the user calls
-	// supplySigningKey via the account page.
-	urepo := models.Repo{
-		Did:                   signupDid,
-		CreatedAt:             time.Now(),
-		Email:                 request.Email,
-		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
-		Password:              string(hashed),
-	}
-
-	if actor == nil {
-		actor = &models.Actor{
-			Did:    signupDid,
-			Handle: request.Handle,
-		}
-
-		if err := s.db.Create(ctx, &urepo, nil).Error; err != nil {
-			logger.Error("error inserting new repo", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-
-		if err := s.db.Create(ctx, &actor, nil).Error; err != nil {
-			logger.Error("error inserting new actor", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-	} else {
-		if err := s.db.Save(ctx, &actor, nil).Error; err != nil {
-			logger.Error("error inserting new actor", "error", err)
-			helpers.ServerError(w, nil)
-			return
-		}
-	}
-
+	var rootCid []byte
+	var rev string
 	if request.Did == nil || *request.Did == "" {
 		bs := newBlockstoreForRepo(signupDid, s.ipfsAPI)
 
@@ -233,19 +199,58 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Sign the genesis commit with the PDS rotation key.
-		root, rev, err := commitRepo(ctx, bs, r, s.plcClient.RotationKeyBytes())
+		root, rRev, err := commitRepo(ctx, bs, r, s.plcClient.RotationKeyBytes())
 		if err != nil {
 			logger.Error("error committing", "error", err)
 			helpers.ServerError(w, nil)
 			return
 		}
+		rootCid = root.Bytes()
+		rev = rRev
+	}
 
-		if err := s.UpdateRepo(ctx, urepo.Did, root, rev); err != nil {
-			logger.Error("error updating repo after commit", "error", err)
-			helpers.ServerError(w, nil)
-			return
+	// SigningKey is intentionally left nil — the PDS never stores a private
+	// key. PublicKey will be populated later when the user calls
+	// supplySigningKey via the account page.
+	urepo := models.Repo{
+		Did:                   signupDid,
+		CreatedAt:             time.Now(),
+		Email:                 request.Email,
+		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
+		Password:              string(hashed),
+		Root:                  rootCid,
+		Rev:                   rev,
+	}
+
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if actor == nil {
+			actor = &models.Actor{
+				Did:    signupDid,
+				Handle: request.Handle,
+			}
+			if err := tx.WithContext(ctx).Create(&urepo).Error; err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).Create(&actor).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := tx.WithContext(ctx).Create(&urepo).Error; err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).Save(&actor).Error; err != nil {
+				return err
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("error inserting new repo/actor", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
 
+	if request.Did == nil || *request.Did == "" {
 		if err := s.evtman.AddEvent(ctx, &events.XRPCStreamEvent{
 			RepoIdentity: &atproto.SyncSubscribeRepos_Identity{
 				Did:    urepo.Did,

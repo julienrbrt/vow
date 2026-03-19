@@ -52,3 +52,7 @@ func (db *DB) Begin(ctx context.Context) *gorm.DB {
 func (db *DB) Client() *gorm.DB {
 	return db.cli
 }
+
+func (db *DB) Transaction(fc func(tx *gorm.DB) error) error {
+	return db.cli.Transaction(fc)
+}

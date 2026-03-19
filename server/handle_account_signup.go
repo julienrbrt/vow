@@ -159,31 +159,6 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	urepo := models.Repo{
-		Did:                   did,
-		CreatedAt:             time.Now(),
-		Email:                 email,
-		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
-		Password:              string(hashed),
-	}
-
-	newActor := &models.Actor{
-		Did:    did,
-		Handle: handle,
-	}
-
-	if err := s.db.Create(ctx, &urepo, nil).Error; err != nil {
-		logger.Error("error inserting repo", "error", err)
-		fail("Something went wrong. Please try again.")
-		return
-	}
-
-	if err := s.db.Create(ctx, newActor, nil).Error; err != nil {
-		logger.Error("error inserting actor", "error", err)
-		fail("Something went wrong. Please try again.")
-		return
-	}
-
 	bs := newBlockstoreForRepo(did, s.ipfsAPI)
 
 	clk := syntax.NewTIDClock(0)
@@ -201,8 +176,32 @@ func (s *Server) handleAccountSignupPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.UpdateRepo(ctx, did, root, rev); err != nil {
-		logger.Error("error updating repo after genesis commit", "error", err)
+	urepo := models.Repo{
+		Did:                   did,
+		CreatedAt:             time.Now(),
+		Email:                 email,
+		EmailVerificationCode: new(fmt.Sprintf("%s-%s", helpers.RandomVarchar(6), helpers.RandomVarchar(6))),
+		Password:              string(hashed),
+		Root:                  root.Bytes(),
+		Rev:                   rev,
+	}
+
+	newActor := &models.Actor{
+		Did:    did,
+		Handle: handle,
+	}
+
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).Create(&urepo).Error; err != nil {
+			return err
+		}
+		if err := tx.WithContext(ctx).Create(newActor).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("error inserting repo or actor", "error", err)
 		fail("Something went wrong. Please try again.")
 		return
 	}
