@@ -17,8 +17,6 @@ type Repo struct {
 	PasswordResetCodeExpiresAt     *time.Time
 	PlcOperationCode               *string
 	PlcOperationCodeExpiresAt      *time.Time
-	AccountDeleteCode              *string
-	AccountDeleteCodeExpiresAt     *time.Time
 	Password                       string
 	// AuthPublicKey holds the compressed P-256 public key bytes for WebAuthn assertion verification.
 	AuthPublicKey []byte
@@ -29,11 +27,11 @@ type Repo struct {
 	// allowCredentials list when requesting an assertion from the passkey.
 	CredentialID []byte
 	// CompatMode enables user-side signing of service-auth JWTs.
-	CompatMode bool
-	Rev          string
-	Root         []byte
-	Preferences  []byte
-	Deactivated  bool
+	CompatMode  bool
+	Rev         string
+	Root        []byte
+	Preferences []byte
+	Deactivated bool
 }
 
 func (r *Repo) Status() *string {

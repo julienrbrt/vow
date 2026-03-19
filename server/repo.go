@@ -192,19 +192,16 @@ type unsignedCommit struct {
 // require a signing key. The caller must obtain a signature over uc.cbor and
 // then call finaliseCommit.
 func buildUnsignedCommit(ctx context.Context, bs blockstore.Blockstore, r *atp.Repo) (*unsignedCommit, error) {
+	// Write diff blocks BEFORE calling r.Commit(), because r.Commit()
+	// traverses the MST and clears the dirty flags, which would cause
+	// WriteDiffBlocks to do nothing if called afterwards.
+	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
+		return nil, fmt.Errorf("writing MST blocks: %w", err)
+	}
+
 	commit, err := r.Commit()
 	if err != nil {
 		return nil, fmt.Errorf("creating commit: %w", err)
-	}
-
-	// Stamp the revision on the blockstore before writing any MST blocks so
-	// that every block carries the correct Rev.
-	if rs, ok := bs.(revSetter); ok {
-		rs.SetRev(commit.Rev)
-	}
-
-	if _, err := r.MST.WriteDiffBlocks(ctx, bs.(legacyblockstore.Blockstore)); err != nil { //nolint:staticcheck
-		return nil, fmt.Errorf("writing MST blocks: %w", err)
 	}
 
 	buf := new(bytes.Buffer)

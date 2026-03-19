@@ -12,7 +12,6 @@ import (
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/events"
 	"github.com/bluesky-social/indigo/util"
-	"golang.org/x/crypto/bcrypt"
 	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
@@ -72,79 +71,11 @@ func (s *Server) deleteAccountByDid(ctx context.Context, did string) error {
 }
 
 // ---------------------------------------------------------------------------
-// com.atproto.server.deleteAccount — legacy XRPC endpoint (did + password + token)
+// com.atproto.server.deleteAccount — unsupported
 // ---------------------------------------------------------------------------
 
-type ComAtprotoServerDeleteAccountRequest struct {
-	Did      string `json:"did"      validate:"required"`
-	Password string `json:"password" validate:"required"`
-	Token    string `json:"token"    validate:"required"`
-}
-
 func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	logger := s.logger.With("name", "handleServerDeleteAccount")
-
-	var req ComAtprotoServerDeleteAccountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logger.Error("error decoding", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-
-	if err := s.validator.Struct(&req); err != nil {
-		logger.Error("error validating", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-
-	urepo, err := s.getRepoActorByDid(ctx, req.Did)
-	if err != nil {
-		logger.Error("error getting repo", "error", err)
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account not found"})
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(urepo.Password), []byte(req.Password)); err != nil {
-		logger.Error("password mismatch", "error", err)
-		s.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid did or password"})
-		return
-	}
-
-	if urepo.AccountDeleteCode == nil || urepo.AccountDeleteCodeExpiresAt == nil {
-		logger.Error("no deletion token found for account")
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":   "InvalidToken",
-			"message": "Token is invalid",
-		})
-		return
-	}
-
-	if *urepo.AccountDeleteCode != req.Token {
-		logger.Error("deletion token mismatch")
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":   "InvalidToken",
-			"message": "Token is invalid",
-		})
-		return
-	}
-
-	if time.Now().UTC().After(*urepo.AccountDeleteCodeExpiresAt) {
-		logger.Error("deletion token expired")
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":   "ExpiredToken",
-			"message": "Token is expired",
-		})
-		return
-	}
-
-	if err := s.deleteAccountByDid(ctx, req.Did); err != nil {
-		logger.Error("error deleting account", "error", err)
-		helpers.ServerError(w, nil)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
+	helpers.InputError(w, new("Account deletion not supported here. Login on Vow and delete the account there."))
 }
 
 // ---------------------------------------------------------------------------
