@@ -56,6 +56,10 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]ComAtprotoSyncListReposRepoItem, 0, len(repos))
 	for _, repo := range repos {
+		if len(repo.Root) == 0 {
+			continue
+		}
+
 		c, err := cid.Cast(repo.Root)
 		if err != nil {
 			helpers.ServerError(w, nil)

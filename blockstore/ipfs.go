@@ -12,6 +12,7 @@ import (
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/kubo/client/rpc"
+	"github.com/ipfs/kubo/core/coreiface"
 	caopts "github.com/ipfs/kubo/core/coreiface/options"
 	"github.com/multiformats/go-multicodec"
 )
@@ -21,6 +22,7 @@ type IPFSBlockstore struct {
 	did string
 	rev string
 	cli *rpc.HttpApi
+	offlineCli iface.CoreAPI
 
 	mu      sync.RWMutex
 	inserts map[cid.Cid]blocks.Block
@@ -28,10 +30,12 @@ type IPFSBlockstore struct {
 
 // NewIPFS creates a blockstore.
 func NewIPFS(did string, cli *rpc.HttpApi) *IPFSBlockstore {
+	offlineCli, _ := cli.WithOptions(caopts.Api.Offline(true))
 	return &IPFSBlockstore{
-		did:     did,
-		cli:     cli,
-		inserts: make(map[cid.Cid]blocks.Block),
+		did:        did,
+		cli:        cli,
+		offlineCli: offlineCli,
+		inserts:    make(map[cid.Cid]blocks.Block),
 	}
 }
 
@@ -50,7 +54,7 @@ func (bs *IPFSBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, err
 	bs.mu.RUnlock()
 
 	p := path.FromCid(c)
-	r, err := bs.cli.Block().Get(ctx, p)
+	r, err := bs.offlineCli.Block().Get(ctx, p)
 	if err != nil {
 		return nil, fmt.Errorf("ipfs block/get: %w", err)
 	}
@@ -128,7 +132,7 @@ func (bs *IPFSBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
 	bs.mu.RUnlock()
 
 	p := path.FromCid(c)
-	_, err := bs.cli.Block().Stat(ctx, p)
+	_, err := bs.offlineCli.Block().Stat(ctx, p)
 	if err != nil {
 		// Not found error means block doesn't exist
 		return false, nil
@@ -179,7 +183,7 @@ func (bs *IPFSBlockstore) GetWriteLog() map[cid.Cid]blocks.Block {
 // Verify checks that a block exists in IPFS, bypassing the local cache.
 func (bs *IPFSBlockstore) Verify(ctx context.Context, c cid.Cid) error {
 	p := path.FromCid(c)
-	_, err := bs.cli.Block().Stat(ctx, p)
+	_, err := bs.offlineCli.Block().Stat(ctx, p)
 	if err != nil {
 		return fmt.Errorf("ipfs block/stat %s: %w", c, err)
 	}

@@ -30,6 +30,14 @@ func (s *Server) handleSyncGetRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(urepo.Root) == 0 {
+		logger.Error("repo root is uninitialized", "did", did)
+		// 400 is appropriate for RepoNotFound in ATProto
+		errStr := "RepoNotFound"
+		helpers.InputError(w, &errStr)
+		return
+	}
+
 	rc, err := cid.Cast(urepo.Root)
 	if err != nil {
 		logger.Error("error casting root cid", "error", err)

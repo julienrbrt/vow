@@ -29,6 +29,13 @@ func (s *Server) handleSyncGetLatestCommit(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if len(urepo.Root) == 0 {
+		logger.Error("repo root is uninitialized", "did", did)
+		errStr := "RepoNotFound"
+		helpers.InputError(w, &errStr)
+		return
+	}
+
 	c, err := cid.Cast(urepo.Root)
 	if err != nil {
 		logger.Error("could not cast root cid", "error", err)

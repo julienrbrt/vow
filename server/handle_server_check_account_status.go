@@ -32,13 +32,15 @@ func (s *Server) handleServerCheckAccountStatus(w http.ResponseWriter, r *http.R
 		RepoRev:   urepo.Rev,
 	}
 
-	rootcid, err := cid.Cast(urepo.Root)
-	if err != nil {
-		logger.Error("error casting cid", "error", err)
-		helpers.ServerError(w, nil)
-		return
+	if len(urepo.Root) > 0 {
+		rootcid, err := cid.Cast(urepo.Root)
+		if err != nil {
+			logger.Error("error casting cid", "error", err)
+			helpers.ServerError(w, nil)
+			return
+		}
+		resp.RepoCommit = rootcid.String()
 	}
-	resp.RepoCommit = rootcid.String()
 
 	type CountResp struct {
 		Ct int64
