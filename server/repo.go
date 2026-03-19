@@ -447,6 +447,14 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 				})
 
 			case OpTypeDelete:
+				existing, _ := r.MST.Get([]byte(path))
+				if existing == nil {
+					results = append(results, ApplyWriteResult{
+						Type: new(OpTypeDelete.String()),
+					})
+					continue
+				}
+
 				var old models.Record
 				if err := rm.db.Raw(ctx, "SELECT value FROM records WHERE did = ? AND nsid = ? AND rkey = ?", nil, urepo.Did, op.Collection, op.Rkey).Scan(&old).Error; err != nil {
 					return cid.Undef, err
@@ -528,6 +536,18 @@ func (rm *RepoMan) applyWrites(ctx context.Context, urepo models.Repo, writes []
 		return cid.Undef, nil
 	}); err != nil {
 		return nil, err
+	}
+
+	if len(atpOps) == 0 {
+		for i := range results {
+			rt := *results[i].Type + "Result"
+			results[i].Type = &rt
+			results[i].Commit = &RepoCommit{
+				Cid: rootcid.String(),
+				Rev: urepo.Rev,
+			}
+		}
+		return results, nil
 	}
 
 	// ── Phase 2: serialise the write log so we can replay it ─────────────
@@ -939,6 +959,10 @@ func (rm *RepoMan) decrementBlobRefs(ctx context.Context, urepo models.Repo, cbo
 // to be honest, we could just store both the cbor and non-cbor in []entries above to avoid an additional
 // unmarshal here. this will work for now though
 func getBlobCidsFromCbor(cbor []byte) ([]cid.Cid, error) {
+	if len(cbor) == 0 {
+		return nil, nil
+	}
+
 	var cids []cid.Cid
 
 	decoded, err := atdata.UnmarshalCBOR(cbor)
