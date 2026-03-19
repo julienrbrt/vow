@@ -119,7 +119,13 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 		}
 
 		tokenstr := pts[1]
-		token, _, err := new(jwt.Parser).ParseUnverified(tokenstr, jwt.MapClaims{})
+		var token *jwt.Token
+		var err error
+		token, _, err = new(jwt.Parser).ParseUnverified(tokenstr, jwt.MapClaims{})
+		if err != nil {
+			helpers.InvalidTokenError(w)
+			return
+		}
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
 			helpers.InvalidTokenError(w)
@@ -147,7 +153,8 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			}
 			did = maybeDid
 
-			maybeRepo, err := s.getRepoActorByDid(ctx, did)
+			var maybeRepo *models.RepoActor
+			maybeRepo, err = s.getRepoActorByDid(ctx, did)
 			if err != nil {
 				logger.Error("error fetching repo", "error", err)
 				helpers.ServerError(w, nil)
@@ -204,6 +211,11 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
 				return key, nil
 			})
+			if err != nil {
+				logger.Error("error parsing jwt", "error", err)
+				helpers.ExpiredTokenError(w)
+				return
+			}
 		} else {
 			// Non-compat mode or regular access/refresh tokens: use PDS server key (ES256)
 			token, err = new(jwt.Parser).Parse(tokenstr, func(t *jwt.Token) (any, error) {
@@ -212,11 +224,11 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 				}
 				return &s.privateKey.PublicKey, nil
 			})
-		}
-		if err != nil {
-			logger.Error("error parsing jwt", "error", err)
-			helpers.ExpiredTokenError(w)
-			return
+			if err != nil {
+				logger.Error("error parsing jwt", "error", err)
+				helpers.ExpiredTokenError(w)
+				return
+			}
 		}
 
 		if !token.Valid {

@@ -169,12 +169,6 @@ func openRepo(ctx context.Context, bs blockstore.Blockstore, rootCid cid.Cid, di
 	}, nil
 }
 
-// revSetter is implemented by blockstores that can be told the current repo
-// revision before blocks are written (so the Rev column is stamped correctly).
-type revSetter interface {
-	SetRev(rev string)
-}
-
 // unsignedCommit is the intermediate product of buildUnsignedCommit. It holds
 // the serialised commit CBOR (without a sig field) plus the rev string, ready
 // for the user to sign. Once the signature arrives, finaliseCommit uses this
@@ -975,13 +969,24 @@ func getBlobCidsFromCbor(cbor []byte) ([]cid.Cid, error) {
 		switch val := item.(type) {
 		case map[string]any:
 			if val["$type"] == "blob" {
-				if ref, ok := val["ref"].(string); ok {
-					c, err := cid.Parse(ref)
+				var c cid.Cid
+				switch ref := val["ref"].(type) {
+				case string:
+					var err error
+					c, err = cid.Parse(ref)
 					if err != nil {
 						return err
 					}
+				case lexutil.LexLink:
+					c = cid.Cid(ref)
+				case cid.Cid:
+					c = ref
+				}
+
+				if c.Defined() {
 					cids = append(cids, c)
 				}
+
 				for _, v := range val {
 					return deepiter(v)
 				}

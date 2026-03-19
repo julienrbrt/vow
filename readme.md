@@ -8,7 +8,11 @@
 
 Vow is a Go PDS (Personal Data Server) for AT Protocol.
 
-## Quick Start with Docker Compose
+## Quick Start
+
+> [!NOTE]
+> Experiment with Vow using the following `DL7KM7UX-4LLQYELW` invite code on the test server [vowpds.srv.rbrt.fr](https://vowpds.srv.rbrt.fr).
+> The PDS accounts are cleared regularly.
 
 ### Prerequisites
 

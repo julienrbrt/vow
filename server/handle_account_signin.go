@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/gorilla/sessions"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -87,31 +86,14 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 	sess, _ := s.sessions.Get(r, s.config.SessionCookieKey)
 
 	req.Username = strings.ToLower(req.Username)
-	var idtype string
-	if _, err := syntax.ParseDID(req.Username); err == nil {
-		idtype = "did"
-	} else if _, err := syntax.ParseHandle(req.Username); err == nil {
-		idtype = "handle"
-	} else {
-		idtype = "email"
-	}
 
 	queryParams := ""
 	if req.QueryParams != "" {
 		queryParams = fmt.Sprintf("?%s", req.QueryParams)
 	}
 
-	// TODO: extract this shared lookup into a helper.
-	var repo models.RepoActor
-	var err error
-	switch idtype {
-	case "did":
-		err = s.db.Raw(ctx, "SELECT r.*, a.* FROM repos r LEFT JOIN actors a ON r.did = a.did WHERE r.did = ?", nil, req.Username).Scan(&repo).Error
-	case "handle":
-		err = s.db.Raw(ctx, "SELECT r.*, a.* FROM actors a LEFT JOIN repos r ON a.did = r.did WHERE a.handle = ?", nil, req.Username).Scan(&repo).Error
-	case "email":
-		err = s.db.Raw(ctx, "SELECT r.*, a.* FROM repos r LEFT JOIN actors a ON r.did = a.did WHERE r.email = ?", nil, req.Username).Scan(&repo).Error
-	}
+	// lookup the account by did, handle or email
+	repo, err := s.getRepoActorByIdentifier(ctx, req.Username)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			sess.AddFlash("Handle or password is incorrect", "error")
