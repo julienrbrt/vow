@@ -3,10 +3,8 @@
 > [!WARNING]
 > This is highly experimental software. Use with caution, especially during account migration.
 
-> [!IMPORTANT]
-> **Vow implements a two-key model for signing using WebAuthn PRF extension.** After registering a passkey, the server never stores a private signing key — the passkey authenticates and provides PRF output, from which a deterministic signing key is derived on-the-fly for each commit. Users fully control their DID.
-
-Vow is a Go PDS (Personal Data Server) for AT Protocol.
+Vow is a Bring-Your-Own-Key (BYOK) PDS (Personal Data Server) for AT Protocol.
+The server never stores a private signing key; all repository transactions are signed by a user passkey.
 
 ## Quick Start
 
