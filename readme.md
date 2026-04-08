@@ -9,7 +9,7 @@ The server never stores a private signing key; all repository transactions are s
 ## Quick Start
 
 > [!NOTE]
-> Experiment with Vow using the following `DL7KM7UX-4LLQYELW` invite code on the test server [vowpds.srv.rbrt.fr](https://vowpds.srv.rbrt.fr).
+> Experiment with Vow using the following `LFPJ3REG-BFICVMGE` invite code on the test server [vowpds.srv.rbrt.fr](https://vowpds.srv.rbrt.fr).
 > The PDS accounts are cleared regularly.
 
 ### Prerequisites
