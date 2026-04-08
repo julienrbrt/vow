@@ -1,10 +1,14 @@
 package server
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/bluesky-social/indigo/atproto/syntax"
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
 
@@ -43,8 +47,7 @@ func (s *Server) handleRepoGetRecord(w http.ResponseWriter, r *http.Request) {
 
 	val, err := atdata.UnmarshalCBOR(record.Value)
 	if err != nil {
-		// Fall back to proxy if we can't find/decode the record locally
-		s.handleProxy(w, r)
+		s.proxyToAppView(w, r)
 		return
 	}
 
@@ -53,4 +56,34 @@ func (s *Server) handleRepoGetRecord(w http.ResponseWriter, r *http.Request) {
 		Cid:   record.Cid,
 		Value: val,
 	})
+}
+
+func (s *Server) proxyToAppView(w http.ResponseWriter, r *http.Request) {
+	endpoint, _, err := s.getAtprotoProxyEndpointFromRequest(r)
+	if err != nil {
+		s.logger.Error("could not get appview endpoint", "error", err)
+		helpers.ServerError(w, nil)
+		return
+	}
+
+	targetURL := fmt.Sprintf("%s%s?%s", strings.TrimSuffix(endpoint, "/"), r.URL.Path, r.URL.RawQuery)
+
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		helpers.ServerError(w, nil)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		helpers.ServerError(w, nil)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
