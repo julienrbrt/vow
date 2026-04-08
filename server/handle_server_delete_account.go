@@ -71,8 +71,12 @@ func (s *Server) deleteAccountByDid(ctx context.Context, did string) error {
 }
 
 // ---------------------------------------------------------------------------
-// com.atproto.server.deleteAccount — unsupported
+// com.atproto.server.requestAccountDelete/deleteAccount — unsupported
 // ---------------------------------------------------------------------------
+
+func (s *Server) handleServerRequestAccountDelete(w http.ResponseWriter, r *http.Request) {
+	helpers.InputError(w, new("Account deletion not supported here. Login on Vow and delete the account there."))
+}
 
 func (s *Server) handleServerDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	helpers.InputError(w, new("Account deletion not supported here. Login on Vow and delete the account there."))
