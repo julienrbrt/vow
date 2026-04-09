@@ -124,7 +124,7 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		Path:     "/",
 		MaxAge:   int(AccountSessionMaxAge.Seconds()),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 	}
 
