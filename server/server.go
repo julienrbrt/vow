@@ -659,6 +659,8 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}()
 
+	go s.cleanupExpiredSessions(ctx)
+
 	<-ctx.Done()
 
 	s.logger.Info("shut down")
@@ -693,6 +695,19 @@ func (s *Server) requestCrawl(ctx context.Context) error {
 	s.lastRequestCrawl = time.Now()
 
 	return nil
+}
+
+func (s *Server) cleanupExpiredSessions(ctx context.Context) {
+	logger := s.logger.With("component", "session-cleanup")
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		cutoff := time.Now().Add(-constants.ConfidentialClientRefreshLifetime)
+		if err := s.db.Exec(ctx, "DELETE FROM oauth_tokens WHERE updated_at < ?", nil, cutoff).Error; err != nil {
+			logger.Error("failed to cleanup expired oauth sessions", "error", err)
+		}
+	}
 }
 
 func (s *Server) UpdateRepo(ctx context.Context, did string, root cid.Cid, rev string) error {
