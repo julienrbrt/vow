@@ -12,22 +12,34 @@ import (
 )
 
 func GenerateCode() string {
-	h, _ := helpers.RandomHex(constants.CodeBytesLength)
+	h, err := helpers.RandomHex(constants.CodeBytesLength)
+	if err != nil {
+		panic(fmt.Sprintf("GenerateCode: %v", err))
+	}
 	return constants.CodePrefix + h
 }
 
 func GenerateTokenId() string {
-	h, _ := helpers.RandomHex(constants.TokenIdBytesLength)
+	h, err := helpers.RandomHex(constants.TokenIdBytesLength)
+	if err != nil {
+		panic(fmt.Sprintf("GenerateTokenId: %v", err))
+	}
 	return constants.TokenIdPrefix + h
 }
 
 func GenerateRefreshToken() string {
-	h, _ := helpers.RandomHex(constants.RefreshTokenBytesLength)
+	h, err := helpers.RandomHex(constants.RefreshTokenBytesLength)
+	if err != nil {
+		panic(fmt.Sprintf("GenerateRefreshToken: %v", err))
+	}
 	return constants.RefreshTokenPrefix + h
 }
 
 func GenerateRequestId() string {
-	h, _ := helpers.RandomHex(constants.RequestIdBytesLength)
+	h, err := helpers.RandomHex(constants.RequestIdBytesLength)
+	if err != nil {
+		panic(fmt.Sprintf("GenerateRequestId: %v", err))
+	}
 	return constants.RequestIdPrefix + h
 }
 

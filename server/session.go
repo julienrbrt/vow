@@ -32,7 +32,7 @@ func (s *Server) signInternalJWT(claims map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshaling payload: %w", err)
 	}
-	encpayload := strings.TrimRight(base64.RawURLEncoding.EncodeToString(pj), "=")
+	encpayload := base64.RawURLEncoding.EncodeToString(pj)
 
 	signingString := fmt.Sprintf("%s.%s", encheader, encpayload)
 

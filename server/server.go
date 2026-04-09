@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	AccountSessionMaxAge = 30 * 24 * time.Hour // one week
+	AccountSessionMaxAge = 30 * 24 * time.Hour
 )
 
 // IPFSConfig holds configuration for the IPFS node that the PDS runs
@@ -264,7 +264,7 @@ func New(args *Args) (*Server, error) {
 	}
 
 	if args.SessionSecret == "" {
-		panic("SESSION SECRET WAS NOT SET. THIS IS REQUIRED. ")
+		return nil, fmt.Errorf("session secret is required")
 	}
 
 	r := chi.NewRouter()
@@ -316,7 +316,7 @@ func New(args *Args) (*Server, error) {
 	httpd := &http.Server{
 		Addr:    args.Addr,
 		Handler: r,
-		// shitty defaults but okay for now, needed for import repo
+		// Extended timeouts to accommodate repo imports and large blob uploads.
 		ReadTimeout:  5 * time.Minute,
 		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  5 * time.Minute,
@@ -328,8 +328,12 @@ func New(args *Args) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
-	gdb.Exec("PRAGMA journal_mode=WAL")
-	gdb.Exec("PRAGMA synchronous=NORMAL")
+	if err := gdb.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+		return nil, fmt.Errorf("failed to set journal_mode=WAL: %w", err)
+	}
+	if err := gdb.Exec("PRAGMA synchronous=NORMAL").Error; err != nil {
+		return nil, fmt.Errorf("failed to set synchronous=NORMAL: %w", err)
+	}
 	logger.Info("connected to SQLite database", "path", args.DbName)
 	dbw := db.NewDB(gdb)
 
@@ -459,7 +463,7 @@ func New(args *Args) (*Server, error) {
 
 	s.loadTemplates()
 
-	s.repoman = NewRepoMan(s) // TODO: this is way too lazy, stop it
+	s.repoman = NewRepoMan(s)
 
 	// TODO: should validate these args
 	if args.SmtpUser == "" || args.SmtpPass == "" || args.SmtpHost == "" || args.SmtpPort == "" || args.SmtpEmail == "" || args.SmtpName == "" {
@@ -657,7 +661,7 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	fmt.Println("shut down")
+	s.logger.Info("shut down")
 
 	return nil
 }

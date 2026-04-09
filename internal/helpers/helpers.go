@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"net/url"
 
@@ -127,7 +127,11 @@ func genericError(w http.ResponseWriter, code int, msg string) {
 func RandomVarchar(length int) string {
 	b := make([]rune, length)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		n, err := crand.Int(crand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			panic(err)
+		}
+		b[i] = letters[n.Int64()]
 	}
 	return string(b)
 }

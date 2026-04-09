@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -81,9 +82,7 @@ func (s *Server) proxyToAppView(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
+	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }

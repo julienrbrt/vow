@@ -46,33 +46,25 @@ Version: `+s.config.Version+"\n")
 	ctx := r.Context()
 
 	var stats homeStats
+	if err := s.db.Raw(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM repos) AS total_accounts,
+			(SELECT COUNT(*) FROM repos WHERE deactivated = 0) AS active_accounts,
+			(SELECT COUNT(*) FROM records) AS total_records,
+			(SELECT COUNT(*) FROM blobs) AS total_blobs,
+			(SELECT COUNT(*) FROM invite_codes WHERE disabled = 0 AND remaining_use_count > 0) AS total_invite_codes
+	`, nil).Scan(&stats).Error; err != nil {
+		s.logger.Error("error fetching home stats", "error", err)
+	}
 
-	var totalAccounts int64
-	s.db.Raw(ctx, "SELECT COUNT(*) FROM repos", nil).Scan(&totalAccounts)
-	stats.TotalAccounts = totalAccounts
-
-	var activeAccounts int64
-	s.db.Raw(ctx, "SELECT COUNT(*) FROM repos WHERE deactivated = 0", nil).Scan(&activeAccounts)
-	stats.ActiveAccounts = activeAccounts
-
-	var totalRecords int64
-	s.db.Raw(ctx, "SELECT COUNT(*) FROM records", nil).Scan(&totalRecords)
-	stats.TotalRecords = totalRecords
-
-	var totalBlobs int64
-	s.db.Raw(ctx, "SELECT COUNT(*) FROM blobs", nil).Scan(&totalBlobs)
-	stats.TotalBlobs = totalBlobs
-
-	var totalInviteCodes int64
-	s.db.Raw(ctx, "SELECT COUNT(*) FROM invite_codes WHERE disabled = 0 AND remaining_use_count > 0", nil).Scan(&totalInviteCodes)
-	stats.TotalInviteCodes = totalInviteCodes
-
-	_ = s.renderTemplate(w, "home.html", homeData{
+	if err := s.renderTemplate(w, "home.html", homeData{
 		Hostname:      s.config.Hostname,
 		Did:           s.config.Did,
 		ContactEmail:  s.config.ContactEmail,
 		Version:       s.config.Version,
 		RequireInvite: s.config.RequireInvite,
 		Stats:         stats,
-	})
+	}); err != nil {
+		s.logger.Error("failed to render template", "error", err)
+	}
 }

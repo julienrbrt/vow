@@ -46,7 +46,7 @@ type wsSignRequest struct {
 // wsSignJWTRequest is the JSON envelope pushed to the signer for service-auth
 // JWT signing (CompatMode).
 type wsSignJWTRequest struct {
-	Type       string `json:"type"`       // always "sign_jwt_request"
+	Type       string `json:"type"` // always "sign_jwt_request"
 	RequestID  string `json:"requestId"`
 	JWTPayload string `json:"jwtPayload"` // base64url-encoded header.payload
 	Aud        string `json:"aud"`        // the audience (service DID)

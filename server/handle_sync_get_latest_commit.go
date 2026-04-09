@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"pkg.rbrt.fr/vow/internal/helpers"
 	"github.com/ipfs/go-cid"
+	"pkg.rbrt.fr/vow/internal/helpers"
 )
 
 type ComAtprotoSyncGetLatestCommitResponse struct {

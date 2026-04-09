@@ -254,7 +254,7 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 		"default_max_age",
 		"userinfo_signed_response_alg",
 		"id_token_signed_response_alg",
-		"userinfo_encryhpted_response_alg",
+		"userinfo_encrypted_response_alg",
 		"authorization_encrypted_response_enc",
 		"authorization_encrypted_response_alg",
 		"tls_client_certificate_bound_access_tokens",
@@ -367,7 +367,7 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 	}
 
 	if !slices.Contains(metadata.ResponseTypes, "code") {
-		return nil, errors.New("response_types must inclue `code`")
+		return nil, errors.New("response_types must include `code`")
 	}
 
 	if !slices.Contains(metadata.GrantTypes, "authorization_code") {
@@ -427,7 +427,7 @@ func validateAndParseMetadata(clientId string, b []byte) (*Metadata, error) {
 				return nil, fmt.Errorf("loopback redirect uri %s must use http", ruri)
 			}
 		case u.Scheme == "http":
-			return nil, errors.New("only loopbvack redirect uris are allowed to use the `http` scheme")
+			return nil, errors.New("only loopback redirect uris are allowed to use the `http` scheme")
 		case u.Scheme == "https":
 			if isLocalHostname(u.Hostname()) {
 				return nil, fmt.Errorf("redirect uri %s's domain must not be a local hostname", ruri)

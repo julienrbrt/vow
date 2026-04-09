@@ -53,6 +53,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+
+		helpers.InputError(w, nil)
+		return
 	}
 
 	req.Identifier = strings.ToLower(req.Identifier)

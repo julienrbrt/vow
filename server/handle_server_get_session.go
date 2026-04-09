@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"pkg.rbrt.fr/vow/internal/helpers"
 	"pkg.rbrt.fr/vow/models"
 )
 
@@ -16,7 +17,11 @@ type ComAtprotoServerGetSessionResponse struct {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	repo, _ := getContextValue[*models.RepoActor](r, contextKeyRepo)
+	repo, ok := getContextValue[*models.RepoActor](r, contextKeyRepo)
+	if !ok {
+		helpers.UnauthorizedError(w, nil)
+		return
+	}
 
 	s.writeJSON(w, 200, ComAtprotoServerGetSessionResponse{
 		Handle:         repo.Handle,

@@ -75,6 +75,9 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+
+		helpers.InputError(w, nil)
+		return
 	}
 
 	var signupDid string
@@ -178,7 +181,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		signupDid = did
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(request.Password), 10)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(request.Password), 12)
 	if err != nil {
 		logger.Error("error hashing password", "error", err)
 		helpers.ServerError(w, nil)

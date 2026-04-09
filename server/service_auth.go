@@ -24,7 +24,11 @@ func (m *ES256KSigningMethod) Verify(signingString string, signature string, key
 	if err != nil {
 		return err
 	}
-	return key.(atcrypto.PublicKey).HashAndVerifyLenient([]byte(signingString), signatureBytes)
+	k, ok := key.(atcrypto.PublicKey)
+	if !ok {
+		return fmt.Errorf("invalid key type for ES256K verification")
+	}
+	return k.HashAndVerifyLenient([]byte(signingString), signatureBytes)
 }
 
 func (m *ES256KSigningMethod) Sign(signingString string, key any) (string, error) {
@@ -42,7 +46,15 @@ func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid 
 	token := strings.TrimSpace(rawToken)
 
 	parsedToken, err := jwt.ParseWithClaims(token, jwt.MapClaims{}, func(token *jwt.Token) (any, error) {
-		did := syntax.DID(token.Claims.(jwt.MapClaims)["iss"].(string))
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			return nil, fmt.Errorf("invalid token claims")
+		}
+		iss, ok := claims["iss"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing iss claim in token")
+		}
+		did := syntax.DID(iss)
 		didDoc, err := s.passport.FetchDoc(ctx, did.String())
 		if err != nil {
 			return nil, fmt.Errorf("unable to resolve did %s: %s", did, err)
@@ -93,9 +105,16 @@ func (s *Server) validateServiceAuth(ctx context.Context, rawToken string, nsid 
 		return "", fmt.Errorf("invalid token: %s", err)
 	}
 
-	claims := parsedToken.Claims.(jwt.MapClaims)
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fmt.Errorf("invalid token claims")
+	}
 	if claims["lxm"] != nsid {
 		return "", fmt.Errorf("bad jwt lexicon method (\"lxm\"). must match: %s", nsid)
 	}
-	return claims["iss"].(string), nil
+	iss, ok := claims["iss"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing iss claim in token")
+	}
+	return iss, nil
 }

@@ -29,9 +29,9 @@ type IPFSBlockstore struct {
 // NewIPFS creates a blockstore.
 func NewIPFS(did string, cli *rpc.HttpApi) *IPFSBlockstore {
 	return &IPFSBlockstore{
-		did:        did,
-		cli:        cli,
-		inserts:    make(map[cid.Cid]blocks.Block),
+		did:     did,
+		cli:     cli,
+		inserts: make(map[cid.Cid]blocks.Block),
 	}
 }
 

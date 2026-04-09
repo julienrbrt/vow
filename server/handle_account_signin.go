@@ -108,7 +108,7 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(repo.Password), []byte(req.Password)); err != nil {
-		if err != bcrypt.ErrMismatchedHashAndPassword {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			sess.AddFlash("Handle or password is incorrect", "error")
 		} else {
 			sess.AddFlash("Something went wrong!", "error")
@@ -124,6 +124,8 @@ func (s *Server) handleAccountSigninPost(w http.ResponseWriter, r *http.Request)
 		Path:     "/",
 		MaxAge:   int(AccountSessionMaxAge.Seconds()),
 		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	sess.Values = map[any]any{}

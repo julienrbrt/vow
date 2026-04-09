@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -173,13 +174,14 @@ func (p *DbPersister) Shutdown(ctx context.Context) error {
 }
 
 func (p *DbPersister) cleanupRoutine() {
+	logger := slog.Default().With("component", "event-cleanup")
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		cutoff := time.Now().Add(-p.Retention)
 		if err := p.Db.Where("created_at < ?", cutoff).Delete(&models.EventRecord{}).Error; err != nil {
-			continue
+			logger.Error("failed to cleanup old events", "error", err)
 		}
 	}
 }

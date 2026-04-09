@@ -11,7 +11,10 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/util"
+	"golang.org/x/sync/singleflight"
 )
+
+var docFlight singleflight.Group
 
 func ResolveHandleFromTXT(ctx context.Context, handle string) (string, error) {
 	name := fmt.Sprintf("_atproto.%s", handle)
@@ -104,33 +107,39 @@ func FetchDidDoc(ctx context.Context, cli *http.Client, did string) (*DidDoc, er
 		cli = util.RobustHTTPClient()
 	}
 
-	ustr, err := DidToDocUrl(did)
+	v, err, _ := docFlight.Do(did, func() (any, error) {
+		ustr, err := DidToDocUrl(did)
+		if err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", ustr, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := cli.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != 200 {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("unable to find did doc at url. did: %s. url: %s", did, ustr)
+		}
+
+		var diddoc DidDoc
+		if err := json.NewDecoder(resp.Body).Decode(&diddoc); err != nil {
+			return nil, err
+		}
+
+		return &diddoc, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", ustr, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := cli.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("unable to find did doc at url. did: %s. url: %s", did, ustr)
-	}
-
-	var diddoc DidDoc
-	if err := json.NewDecoder(resp.Body).Decode(&diddoc); err != nil {
-		return nil, err
-	}
-
-	return &diddoc, nil
+	return v.(*DidDoc), nil
 }
 
 func FetchDidData(ctx context.Context, cli *http.Client, did string) (*DidData, error) {

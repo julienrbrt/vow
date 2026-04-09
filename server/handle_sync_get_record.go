@@ -5,11 +5,11 @@ import (
 	"net/http"
 
 	"github.com/bluesky-social/indigo/carstore"
-	"pkg.rbrt.fr/vow/internal/helpers"
-	"pkg.rbrt.fr/vow/models"
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/ipld/go-car"
+	"pkg.rbrt.fr/vow/internal/helpers"
+	"pkg.rbrt.fr/vow/models"
 )
 
 func (s *Server) handleSyncGetRecord(w http.ResponseWriter, r *http.Request) {

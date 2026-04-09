@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
-	"pkg.rbrt.fr/vow/identity"
 	cbg "github.com/whyrusleeping/cbor-gen"
+	"pkg.rbrt.fr/vow/identity"
 )
 
 type DidCredentials struct {

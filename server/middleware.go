@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -45,7 +46,7 @@ func getContextValue[T any](r *http.Request, key contextKey) (T, bool) {
 func (s *Server) handleAdminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, password, ok := r.BasicAuth()
-		if !ok || username != "admin" || password != s.config.AdminPassword {
+		if !ok || username != "admin" || subtle.ConstantTimeCompare([]byte(password), []byte(s.config.AdminPassword)) != 1 {
 			helpers.InputError(w, new("Unauthorized"))
 			return
 		}
@@ -276,7 +277,7 @@ func (s *Server) handleLegacySessionMiddleware(next http.Handler) http.Handler {
 
 		exp, ok := claims["exp"].(float64)
 		if !ok {
-			logger.Error("error getting iat from token")
+			logger.Error("error getting exp from token")
 			helpers.ServerError(w, nil)
 			return
 		}
