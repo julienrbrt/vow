@@ -55,7 +55,7 @@ lint: ## Verify code style and run static checks
 
 .PHONY: lint-install
 lint-install: ## Install golangci-lint
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
 .PHONY: fmt
 fmt: ## Format code
@@ -67,4 +67,8 @@ check: ## Compile everything, checking syntax (does not output binaries)
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image
-	docker build -t vow .
+	docker build -t vow:latest -t atcr.io/julien.rbrt.fr/vow:latest .
+
+.PHONY: docker-push
+docker-push: ## Push the Docker image to the registry
+	docker push atcr.io/julien.rbrt.fr/vow:latest
