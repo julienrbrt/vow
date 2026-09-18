@@ -262,7 +262,7 @@ docker compose up -d
 
 ## Thanks
 
-Vow is based on [Cocoon](https://tangled.org/hailey.at/cocoon). Many thanks for the solid foundation.
+Vow is based on [Cocoon](https://https://github.com/haileyok/cocoon). Many thanks for the solid foundation.
 
 ### Vow vs Cocoon
 
