@@ -36,7 +36,9 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/whyrusleeping/cbor-gen v0.3.1
 	golang.org/x/crypto v0.49.0
+	golang.org/x/sync v0.20.0
 	gorm.io/gorm v1.31.1
+	gotest.tools/v3 v3.5.2
 )
 
 require (
@@ -63,6 +65,7 @@ require (
 	github.com/gocql/gocql v1.7.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/hailocab/go-hostpool v0.0.0-20160125115350-e80d13ce29ed // indirect
@@ -158,7 +161,6 @@ require (
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

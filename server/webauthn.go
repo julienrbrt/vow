@@ -332,5 +332,17 @@ func decompressP256(compressed []byte) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("failed to unmarshal compressed P-256 key")
 	}
 
-	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+	// Setting the PublicKey coordinate fields directly is deprecated; encode
+	// the point in the uncompressed SEC 1 form and parse it instead.
+	uncompressed := make([]byte, 65)
+	uncompressed[0] = 0x04
+	x.FillBytes(uncompressed[1:33])
+	y.FillBytes(uncompressed[33:65])
+
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, uncompressed)
+	if err != nil {
+		return nil, fmt.Errorf("parse P-256 public key: %w", err)
+	}
+
+	return pub, nil
 }
